@@ -43,7 +43,7 @@ CampaignCustomer.init(
     indexes: [
       {
         unique: true,
-        fields: ['campaign_id', 'customerId'],
+        fields: ['campaign_id', 'customer_id'],
         name: 'uq_campaign_customer',
       },
     ],
