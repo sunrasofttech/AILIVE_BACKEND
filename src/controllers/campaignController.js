@@ -5,6 +5,8 @@ const QueueService = require('../services/queueService');
 const SubscriptionService = require('../services/subscriptionService');
 const { createCampaignSchema, updateCampaignSchema } = require('../validators/campaign');
 
+const MAX_RETRIES = 3;
+
 class CampaignController {
   /**
    * Get all merchant's campaigns
