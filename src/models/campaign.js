@@ -51,7 +51,7 @@ Campaign.init(
     },
     status: {
       type: DataTypes.STRING(20),
-      defaultValue: 'draft', // draft, scheduled, running, paused, completed, failed
+      defaultValue: 'draft', // draft, scheduled, running, paused, stopped, completed, failed
     },
   },
   {

@@ -1,6 +1,8 @@
 const { VobizAccount, VobizNumber } = require('../models');
 const ResponseBuilder = require('../utils/response');
 const { connectAccountSchema, addNumberSchema, updateNumberSchema } = require('../validators/vobiz');
+const { encrypt, decrypt } = require('../utils/crypto');
+const defaults = require('../config/defaults');
 
 class VobizController {
   /**
@@ -14,17 +16,21 @@ class VobizController {
       }
 
       const { customerId, apiKey, apiSecret } = value;
+      
+      const encryptEnabled = defaults.vobiz.encryptCredentials;
+      const finalApiKey = encryptEnabled ? encrypt(apiKey) : apiKey;
+      const finalApiSecret = encryptEnabled ? encrypt(apiSecret) : apiSecret;
 
       let account = await VobizAccount.findOne({ where: { userId: req.user.id } });
 
       if (account) {
-        await account.update({ customerId, apiKey, apiSecret });
+        await account.update({ customerId, apiKey: finalApiKey, apiSecret: finalApiSecret });
       } else {
         account = await VobizAccount.create({
           userId: req.user.id,
           customerId,
-          apiKey,
-          apiSecret,
+          apiKey: finalApiKey,
+          apiSecret: finalApiSecret,
         });
       }
 
@@ -32,7 +38,7 @@ class VobizController {
       const sanitizedResponse = {
         id: account.id,
         customerId: account.customerId,
-        apiKey: `${account.apiKey.substring(0, 4)}...`,
+        apiKey: `${apiKey.substring(0, 4)}...`,
       };
 
       return ResponseBuilder.success(res, sanitizedResponse, 'VoBiz account connected successfully');
@@ -51,10 +57,12 @@ class VobizController {
         return ResponseBuilder.error(res, 'VoBiz account credentials not configured yet', 404);
       }
 
+      const decryptedApiKey = decrypt(account.apiKey);
+
       return ResponseBuilder.success(res, {
         id: account.id,
         customerId: account.customerId,
-        apiKey: `${account.apiKey.substring(0, 4)}...`,
+        apiKey: `${decryptedApiKey.substring(0, 4)}...`,
       }, 'VoBiz account configuration retrieved');
     } catch (err) {
       next(err);

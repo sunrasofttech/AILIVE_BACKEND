@@ -104,7 +104,37 @@ class VoiceController {
       next(err);
     }
   }
-
 }
+
+/**
+ * Automatically cleans up cached voice previews older than 24 hours
+ */
+function cleanupOldPreviews() {
+  const previewsDir = path.join(__dirname, '../../uploads/previews');
+  if (!fs.existsSync(previewsDir)) return;
+
+  try {
+    const files = fs.readdirSync(previewsDir);
+    const now = Date.now();
+    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+
+    for (const file of files) {
+      if (file.startsWith('preview-') && file.endsWith('.wav')) {
+        const filePath = path.join(previewsDir, file);
+        const stats = fs.statSync(filePath);
+        if (now - stats.mtimeMs > maxAge) {
+          fs.unlinkSync(filePath);
+          console.log(`Evicted expired voice preview from cache: ${file}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to cleanup old voice previews:', err);
+  }
+}
+
+// Run cleanup once on startup and then every 24 hours
+cleanupOldPreviews();
+setInterval(cleanupOldPreviews, 24 * 60 * 60 * 1000);
 
 module.exports = new VoiceController();

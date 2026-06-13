@@ -4,6 +4,7 @@ const QueueService = require('../services/queueService');
 const SubscriptionService = require('../services/subscriptionService');
 const VobizService = require('../services/vobizService');
 const { Campaign, CampaignCustomer, CallSession, CallLog, VobizNumber, VobizAccount, User, Agent } = require('../models');
+const { decrypt } = require('../utils/crypto');
 
 async function startCallWorker() {
   console.log('Call Worker started.');
@@ -86,13 +87,54 @@ async function processPlaceCall(payload) {
       return;
     }
 
+    // Check plan-level concurrency limits
+    if (limitCheck.maxConcurrent !== undefined && limitCheck.maxConcurrent !== null) {
+      const userCampaigns = await Campaign.findAll({
+        where: { userId, status: 'running' }
+      });
+      let totalUserActiveCalls = 0;
+      for (const uc of userCampaigns) {
+        totalUserActiveCalls += await QueueService.getActiveCalls(uc.id);
+      }
+
+      if (totalUserActiveCalls >= limitCheck.maxConcurrent) {
+        console.log(`Merchant ${userId} plan concurrency limit saturated (${totalUserActiveCalls}/${limitCheck.maxConcurrent}). Re-scheduling call job.`);
+        await QueueService.scheduleJob('PLACE_CALL', payload, Date.now() + 5000);
+        return;
+      }
+    }
+
     // 4. Check if already called/calling this customer to avoid race conditions
     const customerMapping = await CampaignCustomer.findOne({
       where: { campaignId, customerId },
+      include: ['customer']
     });
 
-    if (!customerMapping || customerMapping.callStatus === 'completed' || customerMapping.callStatus === 'calling') {
+    if (!customerMapping || customerMapping.callStatus !== 'pending') {
       console.log(`Customer ${customerId} is already processed or being processed. Skipping.`);
+      return;
+    }
+
+    const customer = customerMapping.customer;
+    if (!customer) {
+      console.log(`Customer details not found for ${customerId}. Skipping.`);
+      return;
+    }
+
+    // Atomic DB Lock
+    const [updatedCount] = await CampaignCustomer.update(
+      { callStatus: 'calling', lastCallTime: new Date() },
+      {
+        where: {
+          campaignId,
+          customerId,
+          callStatus: 'pending'
+        }
+      }
+    );
+
+    if (updatedCount === 0) {
+      console.log(`Customer ${customerId} was locked by another worker. Skipping.`);
       return;
     }
 
@@ -100,17 +142,15 @@ async function processPlaceCall(payload) {
     // Get Merchant VoBiz account credentials and VoBiz Number
     const vobizAccount = await VobizAccount.findOne({ where: { userId } });
     const vobizNumber = await VobizNumber.findByPk(campaign.vobizNumberId);
-    const customer = await customerMapping.getCustomer();
 
     if (!vobizAccount || !vobizNumber) {
       console.log(`Missing VoBiz configuration for merchant ${userId}. Failing this call.`);
-      customerMapping.callStatus = 'failed';
-      await customerMapping.save();
+      await CampaignCustomer.update(
+        { callStatus: 'failed' },
+        { where: { campaignId, customerId } }
+      );
       return;
     }
-
-    // Increment concurrency counter
-    await QueueService.incrementActiveCalls(campaignId);
 
     // Create session token and db call record
     const wsToken = crypto.randomBytes(32).toString('hex');
@@ -125,9 +165,8 @@ async function processPlaceCall(payload) {
       status: 'initiated',
     });
 
-    customerMapping.callStatus = 'calling';
-    customerMapping.lastCallTime = new Date();
-    await customerMapping.save();
+    // Register active call in ZSET
+    await QueueService.registerActiveCall(campaignId, session.id);
 
     await CallLog.create({
       callSessionId: session.id,
@@ -135,10 +174,20 @@ async function processPlaceCall(payload) {
       message: `Call job dispatched. Outbound dial initiated to ${customer.mobile}`,
     });
 
+    // Decrypt credentials with fallback
+    let decryptedApiKey, decryptedApiSecret;
+    try {
+      decryptedApiKey = decrypt(vobizAccount.apiKey);
+      decryptedApiSecret = decrypt(vobizAccount.apiSecret);
+    } catch (err) {
+      decryptedApiKey = vobizAccount.apiKey;
+      decryptedApiSecret = vobizAccount.apiSecret;
+    }
+
     // Invoke VoBiz Outbound dialing API
     const dialResponse = await VobizService.initiateCall({
-      apiKey: vobizAccount.apiKey,
-      apiSecret: vobizAccount.apiSecret,
+      apiKey: decryptedApiKey,
+      apiSecret: decryptedApiSecret,
       fromNumber: vobizNumber.number,
       toNumber: customer.mobile,
       wsToken,
@@ -158,11 +207,13 @@ async function processPlaceCall(payload) {
         message: `VoBiz outbound dial trigger failed: ${dialResponse.error}`,
       });
 
-      customerMapping.callStatus = 'failed';
-      await customerMapping.save();
+      await CampaignCustomer.update(
+        { callStatus: 'failed' },
+        { where: { campaignId, customerId } }
+      );
 
-      // Decrement concurrency
-      await QueueService.decrementActiveCalls(campaignId);
+      // Deregister active call
+      await QueueService.deregisterActiveCall(campaignId, session.id);
     }
 
   } catch (err) {

@@ -46,6 +46,10 @@ CampaignCustomer.init(
         fields: ['campaign_id', 'customer_id'],
         name: 'uq_campaign_customer',
       },
+      {
+        fields: ['campaign_id', 'call_status'],
+        name: 'idx_campaign_status',
+      },
     ],
   }
 );

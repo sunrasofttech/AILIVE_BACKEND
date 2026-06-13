@@ -3,6 +3,12 @@ const crypto = require('crypto');
 const { User, Admin, Subscription, Plan, Category } = require('../models');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/token');
 const ResponseBuilder = require('../utils/response');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/email');
+
+function hashToken(token) {
+  if (!token) return null;
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 const {
   merchantRegisterSchema,
   adminRegisterSchema,
@@ -80,6 +86,9 @@ class AuthController {
         status: 'active',
       });
 
+      // Send verification email in the background
+      await sendVerificationEmail(email, verificationToken);
+
       // Response (Excludes password hash)
       const userResponse = {
         id: merchant.id,
@@ -91,7 +100,7 @@ class AuthController {
 
       return ResponseBuilder.success(
         res,
-        { user: userResponse, verificationToken },
+        { user: userResponse },
         'Merchant registered successfully. Please verify your email.',
         201
       );
@@ -191,9 +200,9 @@ class AuthController {
       const accessToken = generateAccessToken(tokenPayload);
       const refreshToken = generateRefreshToken(tokenPayload);
 
-      // Save Refresh Token for validation
+      // Save Refresh Token for validation (hashed)
       if (role === 'merchant') {
-        account.refreshToken = refreshToken;
+        account.refreshToken = hashToken(refreshToken);
         await account.save();
       }
 
@@ -234,7 +243,7 @@ class AuthController {
         account = await Admin.findByPk(decoded.id);
       } else {
         account = await User.findByPk(decoded.id);
-        if (account && account.refreshToken !== refreshToken) {
+        if (account && account.refreshToken !== hashToken(refreshToken)) {
           return ResponseBuilder.error(res, 'Session expired or revoked', 401);
         }
       }
@@ -248,7 +257,7 @@ class AuthController {
       const newRefreshToken = generateRefreshToken(tokenPayload);
 
       if (decoded.role === 'merchant') {
-        account.refreshToken = newRefreshToken;
+        account.refreshToken = hashToken(newRefreshToken);
         await account.save();
       }
 
@@ -329,10 +338,13 @@ class AuthController {
       account.resetTokenExpires = resetTokenExpires;
       await account.save();
 
+      // Send password reset email in the background
+      await sendPasswordResetEmail(email, resetToken, role);
+
       return ResponseBuilder.success(
         res,
-        { resetToken }, // Returned directly for API demonstration
-        'Password reset token generated successfully. Send token via reset endpoint.'
+        null,
+        'If this email exists, a password reset link has been sent'
       );
     } catch (err) {
       next(err);

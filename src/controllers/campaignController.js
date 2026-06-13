@@ -1,4 +1,5 @@
 const { Campaign, CampaignCustomer, CustomerList, CustomerListMember, Customer, VobizNumber, Agent, sequelize } = require('../models');
+const { Op } = require('sequelize');
 const ResponseBuilder = require('../utils/response');
 const QueueService = require('../services/queueService');
 const SubscriptionService = require('../services/subscriptionService');
@@ -159,50 +160,40 @@ class CampaignController {
         campaign.status = 'running';
         await campaign.save({ transaction });
 
-        // Fetch customers from list and populate campaign_customers
-        const members = await CustomerListMember.findAll({
+        // Fetch customers from list count
+        const memberCount = await CustomerListMember.count({
           where: { customerListId: campaign.customerListId },
           transaction,
         });
 
-        if (members.length === 0) {
+        if (memberCount === 0) {
           await transaction.rollback();
           return ResponseBuilder.error(res, 'Target customer list is empty. Cannot start campaign.', 400);
         }
 
-        const campaignCustomers = members.map((m) => ({
-          campaignId: campaign.id,
-          customerId: m.customerId,
-          callStatus: 'pending',
-        }));
-
-        await CampaignCustomer.bulkCreate(campaignCustomers, { ignoreDuplicates: true, transaction });
+        // Link customers atomically via MySQL INSERT ... SELECT to prevent OOM
+        await sequelize.query(
+          `INSERT IGNORE INTO campaign_customers (id, campaign_id, customer_id, call_status, retry_count, created_at, updated_at)
+           SELECT UUID(), :campaignId, customer_id, 'pending', 0, NOW(), NOW()
+           FROM customer_list_members
+           WHERE customer_list_id = :customerListId AND deleted_at IS NULL`,
+          {
+            replacements: {
+              campaignId: campaign.id,
+              customerListId: campaign.customerListId
+            },
+            type: sequelize.QueryTypes.INSERT,
+            transaction
+          }
+        );
 
         await transaction.commit();
-
-        // Schedule individual calls in Redis
-        const spacingSeconds = campaign.intervalBetweenCalls || 5;
-        const now = Date.now();
-
-        for (let i = 0; i < members.length; i++) {
-          const runAt = now + (i * spacingSeconds * 1000);
-          await QueueService.scheduleJob(
-            'PLACE_CALL',
-            {
-              campaignId: campaign.id,
-              customerId: members[i].customerId,
-              userId: req.user.id,
-            },
-            runAt
-          );
-        }
 
         return ResponseBuilder.success(res, campaign, 'Campaign started immediately');
       } else {
         // Schedule start via Redis Sorted Set
         campaign.status = 'scheduled';
         await campaign.save({ transaction });
-        await transaction.commit();
 
         await QueueService.scheduleJob(
           'START_CAMPAIGN',
@@ -212,6 +203,8 @@ class CampaignController {
           },
           startTime.getTime()
         );
+
+        await transaction.commit();
 
         return ResponseBuilder.success(res, campaign, `Campaign scheduled to start at ${campaign.startTime}`);
       }
@@ -250,48 +243,40 @@ class CampaignController {
    * Resume Campaign
    */
   async resume(req, res, next) {
+    const transaction = await sequelize.transaction();
     try {
-      const campaign = await Campaign.findOne({ where: { id: req.params.id, userId: req.user.id } });
+      const campaign = await Campaign.findOne({
+        where: { id: req.params.id, userId: req.user.id },
+        transaction,
+      });
       if (!campaign) {
+        await transaction.rollback();
         return ResponseBuilder.error(res, 'Campaign not found', 404);
       }
 
       if (campaign.status !== 'paused') {
+        await transaction.rollback();
         return ResponseBuilder.error(res, 'Only paused campaigns can be resumed', 400);
       }
 
       // Validate limits again
       const limitCheck = await SubscriptionService.validateCallLimits(req.user.id);
       if (!limitCheck.isValid) {
+        await transaction.rollback();
         return ResponseBuilder.error(res, `Failed to resume campaign: ${limitCheck.reason}`, 403);
       }
 
       campaign.status = 'running';
-      await campaign.save();
+      await campaign.save({ transaction });
 
-      // Find remaining pending calls and reschedule them
-      const pendingCustomers = await CampaignCustomer.findAll({
-        where: { campaignId: campaign.id, callStatus: 'pending' },
-      });
+       // Resuming campaign; lazy-loader dispatcher loop will pick up call jobs dynamically.
+       await transaction.commit();
 
-      const spacingSeconds = campaign.intervalBetweenCalls || 5;
-      const now = Date.now();
-
-      for (let i = 0; i < pendingCustomers.length; i++) {
-        const runAt = now + (i * spacingSeconds * 1000);
-        await QueueService.scheduleJob(
-          'PLACE_CALL',
-          {
-            campaignId: campaign.id,
-            customerId: pendingCustomers[i].customerId,
-            userId: req.user.id,
-          },
-          runAt
-        );
-      }
-
-      return ResponseBuilder.success(res, campaign, 'Campaign resumed. Pending calls rescheduled.');
+       return ResponseBuilder.success(res, campaign, 'Campaign resumed successfully.');
     } catch (err) {
+      if (!transaction.finished) {
+        await transaction.rollback();
+      }
       next(err);
     }
   }
@@ -310,7 +295,7 @@ class CampaignController {
         return ResponseBuilder.error(res, 'Campaign is not currently running or paused', 400);
       }
 
-      campaign.status = 'completed'; // Stopped campaigns are marked completed/finished
+      campaign.status = 'stopped';
       await campaign.save();
 
       // Clear concurrency key in Redis
@@ -326,61 +311,72 @@ class CampaignController {
    * Retry Failed Calls in Campaign
    */
   async retryFailedCalls(req, res, next) {
+    const transaction = await sequelize.transaction();
     try {
-      const campaign = await Campaign.findOne({ where: { id: req.params.id, userId: req.user.id } });
+      const campaign = await Campaign.findOne({
+        where: { id: req.params.id, userId: req.user.id },
+        transaction,
+      });
       if (!campaign) {
+        await transaction.rollback();
         return ResponseBuilder.error(res, 'Campaign not found', 404);
       }
 
-      if (campaign.status !== 'completed' && campaign.status !== 'failed') {
-        return ResponseBuilder.error(res, 'Campaign must be completed or failed to retry calls', 400);
+      if (campaign.status !== 'completed' && campaign.status !== 'failed' && campaign.status !== 'stopped') {
+        await transaction.rollback();
+        return ResponseBuilder.error(res, 'Campaign must be completed, stopped, or failed to retry calls', 400);
       }
 
       // Check limits
       const limitCheck = await SubscriptionService.validateCallLimits(req.user.id);
       if (!limitCheck.isValid) {
+        await transaction.rollback();
         return ResponseBuilder.error(res, `Failed to retry calls: ${limitCheck.reason}`, 403);
       }
 
-      // Fetch failed calls in this campaign
-      const failedMappings = await CampaignCustomer.findAll({
-        where: { campaignId: campaign.id, callStatus: 'failed' },
+      // Count failed calls under the limit
+      const failedCount = await CampaignCustomer.count({
+        where: {
+          campaignId: campaign.id,
+          callStatus: 'failed',
+          retryCount: {
+            [Op.lt]: MAX_RETRIES
+          }
+        },
+        transaction,
       });
 
-      if (failedMappings.length === 0) {
-        return ResponseBuilder.error(res, 'No failed calls found to retry', 400);
+      if (failedCount === 0) {
+        await transaction.rollback();
+        return ResponseBuilder.error(res, 'No failed calls under the retry limit found to retry', 400);
       }
 
-      // Reset failed mappings to pending
-      for (const mapping of failedMappings) {
-        mapping.callStatus = 'pending';
-        mapping.retryCount += 1;
-        await mapping.save();
-      }
+      // Reset failed mappings to pending atomically
+      await CampaignCustomer.update(
+        { callStatus: 'pending' },
+        {
+          where: {
+            campaignId: campaign.id,
+            callStatus: 'failed',
+            retryCount: {
+              [Op.lt]: MAX_RETRIES
+            }
+          },
+          transaction,
+        }
+      );
 
       // Set campaign to running again
       campaign.status = 'running';
-      await campaign.save();
+      await campaign.save({ transaction });
 
-      // Reschedule jobs in Redis
-      const spacingSeconds = campaign.intervalBetweenCalls || 5;
-      const now = Date.now();
+      await transaction.commit();
 
-      for (let i = 0; i < failedMappings.length; i++) {
-        const runAt = now + (i * spacingSeconds * 1000);
-        await QueueService.scheduleJob(
-          'PLACE_CALL',
-          {
-            campaignId: campaign.id,
-            customerId: failedMappings[i].customerId,
-            userId: req.user.id,
-          },
-          runAt
-        );
-      }
-
-      return ResponseBuilder.success(res, campaign, `Retrying ${failedMappings.length} failed calls`);
+      return ResponseBuilder.success(res, campaign, `Retrying ${failedCount} failed calls`);
     } catch (err) {
+      if (!transaction.finished) {
+        await transaction.rollback();
+      }
       next(err);
     }
   }

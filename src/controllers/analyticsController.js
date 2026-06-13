@@ -10,9 +10,9 @@ class AnalyticsController {
     try {
       const { campaignId } = req.query;
 
-      const filter = { user_id: req.user.id };
+      const filter = { userId: req.user.id };
       if (campaignId) {
-        filter.campaign_id = campaignId;
+        filter.campaignId = campaignId;
       }
 
       // Aggregate call counts from CallReport
@@ -82,9 +82,9 @@ class AnalyticsController {
     try {
       const { campaignId } = req.query;
 
-      const filter = { user_id: req.user.id };
+      const filter = { userId: req.user.id };
       if (campaignId) {
-        filter.campaign_id = campaignId;
+        filter.campaignId = campaignId;
       }
 
       // Count outcomes

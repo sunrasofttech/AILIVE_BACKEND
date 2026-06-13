@@ -7,21 +7,24 @@ const { CallReport, CampaignCustomer, Campaign, sequelize } = require('../models
 async function startAiWorker() {
   console.log('AI Worker started.');
 
-  // Create duplicate redis client to handle blocking subscription listen
-  const subClient = await duplicateClient();
+  const client = await duplicateClient();
+  const REPORT_QUEUE = 'report_queue';
 
-  const channel = 'call_completed';
-
-  await subClient.subscribe(channel, async (message) => {
+  while (true) {
     try {
-      const event = JSON.parse(message);
+      const jobData = await client.blPop(REPORT_QUEUE, 30);
+      if (!jobData) {
+        continue;
+      }
+
+      const event = JSON.parse(jobData.element);
       console.log(`AI Worker picked up completed call session: ${event.callSessionId}`);
 
       await processCallAnalysis(event);
     } catch (err) {
-      console.error('AI Worker failed to process subscription event:', err);
+      console.error('AI Worker failed to process queue event:', err);
     }
-  });
+  }
 }
 
 /**
@@ -31,39 +34,59 @@ async function processCallAnalysis(event) {
   const { callSessionId, userId, campaignId, vobizNumberId, customerId, transcript, duration, recordingUrl } = event;
 
   try {
-    // 1. Trigger Gemini Transcript Analysis
+    // 1. Idempotency Check: check if CallReport already exists for this session
+    const existingReport = await CallReport.findOne({ where: { callSessionId } });
+    if (existingReport) {
+      console.log(`CallReport for session ${callSessionId} already exists. Skipping.`);
+      return;
+    }
+
+    // 2. Trigger Gemini Transcript Analysis
     const analysis = await AiAnalysisService.analyzeTranscript(transcript);
     console.log(`[AI Analysis Result] Session: ${callSessionId} -> Outcome: ${analysis.outcome}, Score: ${analysis.leadScore}`);
 
-    // 2. Save CallReport in DB
-    await CallReport.create({
-      userId,
-      campaignId,
-      callSessionId,
-      vobizNumberId,
-      customerId,
-      transcript,
-      summary: analysis.summary,
-      duration,
-      outcome: analysis.outcome,
-      sentiment: analysis.sentiment,
-      leadScore: analysis.leadScore,
-      recordingUrl,
+    // 3. Save CallReport in DB idempotently
+    const [report, created] = await CallReport.findOrCreate({
+      where: { callSessionId },
+      defaults: {
+        userId,
+        campaignId,
+        vobizNumberId,
+        customerId,
+        transcript,
+        summary: analysis.summary,
+        duration,
+        outcome: analysis.outcome,
+        sentiment: analysis.sentiment,
+        leadScore: analysis.leadScore,
+        recordingUrl,
+      }
     });
 
-    // 3. Deduct call credit from merchant's subscription
+    if (!created) {
+      console.log(`CallReport for session ${callSessionId} was already created by another worker. Skipping.`);
+      return;
+    }
+
+    // 4. Deduct call credit from merchant's subscription
     await SubscriptionService.recordCallUsage(userId);
 
-    // 4. Update campaign customer status
+    // 5. Update campaign customer status
     if (campaignId) {
-      const callStatus = (analysis.outcome === 'No Answer' || analysis.outcome === 'Wrong Number') 
-        ? 'failed' 
-        : 'completed';
+      const isFailed = (analysis.outcome === 'No Answer' || analysis.outcome === 'Wrong Number');
+      const callStatus = isFailed ? 'failed' : 'completed';
 
-      await CampaignCustomer.update(
-        { callStatus },
-        { where: { campaignId, customerId } }
-      );
+      const mapping = await CampaignCustomer.findOne({
+        where: { campaignId, customerId }
+      });
+
+      if (mapping) {
+        mapping.callStatus = callStatus;
+        if (isFailed) {
+          mapping.retryCount = (mapping.retryCount || 0) + 1;
+        }
+        await mapping.save();
+      }
 
       // Check if all campaign customers have been processed
       const remainingPending = await CampaignCustomer.count({

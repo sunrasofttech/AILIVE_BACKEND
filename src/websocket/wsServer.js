@@ -34,9 +34,7 @@ function startWebSocketServer(server = null) {
 
     wss = new WebSocketServer({ server: httpServer });
 
-    wss.on('connection', (ws, req) => {
-      vobizSocketHandler.handleConnection(ws, req);
-    });
+    setupWss(wss);
 
     httpServer.listen(port, () => {
       console.log(`WebSocket standalone server listening on port ${port}`);
@@ -44,11 +42,33 @@ function startWebSocketServer(server = null) {
     return httpServer;
   }
 
+  setupWss(wss);
+  return wss;
+}
+
+function setupWss(wss) {
   wss.on('connection', (ws, req) => {
+    ws.isAlive = true;
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
     vobizSocketHandler.handleConnection(ws, req);
   });
 
-  return wss;
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) {
+        console.log('Terminating dead WebSocket connection...');
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(interval);
+  });
 }
 
 // Support executing directly as a standalone process

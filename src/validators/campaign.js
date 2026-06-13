@@ -19,7 +19,7 @@ const updateCampaignSchema = Joi.object({
   startTime: Joi.date().iso().optional(),
   intervalBetweenCalls: Joi.number().integer().min(1).optional(),
   maxConcurrentCalls: Joi.number().integer().min(1).optional(),
-  status: Joi.string().valid('draft', 'scheduled', 'running', 'paused', 'completed', 'failed').optional(),
+  status: Joi.string().valid('draft', 'scheduled', 'running', 'paused', 'completed', 'failed', 'stopped').optional(),
 });
 
 module.exports = {

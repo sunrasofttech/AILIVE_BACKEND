@@ -21,6 +21,16 @@ async function bootServer() {
 
       const { seedVoices } = require('./utils/seeder');
       await seedVoices();
+
+      // Start queue workers automatically in development background
+      console.log('Starting background queue workers (Scheduler, Call, and AI Worker)...');
+      const { startScheduler } = require('./workers/schedulerWorker');
+      const { startCallWorker } = require('./workers/callWorker');
+      const { startAiWorker } = require('./workers/aiWorker');
+
+      startScheduler();
+      startCallWorker();
+      startAiWorker();
     }
 
     const server = http.createServer(app);

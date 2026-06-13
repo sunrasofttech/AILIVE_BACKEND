@@ -71,6 +71,16 @@ CallReport.init(
     sequelize,
     modelName: 'CallReport',
     tableName: 'call_reports',
+    indexes: [
+      {
+        fields: ['user_id'],
+        name: 'idx_call_reports_user',
+      },
+      {
+        fields: ['campaign_id'],
+        name: 'idx_call_reports_campaign',
+      },
+    ],
   }
 );
 

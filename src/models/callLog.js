@@ -34,6 +34,12 @@ CallLog.init(
     modelName: 'CallLog',
     tableName: 'call_logs',
     updatedAt: false, // only track created_at
+    indexes: [
+      {
+        fields: ['call_session_id'],
+        name: 'idx_call_logs_session',
+      },
+    ],
   }
 );
 

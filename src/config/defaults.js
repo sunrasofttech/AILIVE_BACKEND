@@ -56,6 +56,9 @@ module.exports = {
     get apiUrl() {
       return process.env.VOBIZ_API_URL || 'https://api.vobiz.example.com/v1';
     },
+    get encryptCredentials() {
+      return process.env.ENCRYPT_CREDENTIALS === 'true';
+    },
   },
 
   // Redis Configuration
@@ -103,6 +106,25 @@ module.exports = {
     },
     get refreshExpiration() {
       return process.env.JWT_REFRESH_EXPIRATION || '7d';
+    },
+  },
+
+  // SMTP Configuration
+  smtp: {
+    get host() {
+      return process.env.SMTP_HOST || null;
+    },
+    get port() {
+      return parseInt(process.env.SMTP_PORT || '587', 10);
+    },
+    get user() {
+      return process.env.SMTP_USER || null;
+    },
+    get pass() {
+      return process.env.SMTP_PASS || null;
+    },
+    get from() {
+      return process.env.SMTP_FROM || 'noreply@ailive.com';
     },
   },
 };

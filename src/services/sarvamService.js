@@ -1,6 +1,31 @@
 const axios = require('axios');
 const defaults = require('../config/defaults');
 
+const SARVAM_LOCALE_MAP = {
+  'en': 'en-IN',
+  'hi': 'hi-IN',
+  'bn': 'bn-IN',
+  'ta': 'ta-IN',
+  'te': 'te-IN',
+  'gu': 'gu-IN',
+  'kn': 'kn-IN',
+  'ml': 'ml-IN',
+  'mr': 'mr-IN',
+  'pa': 'pa-IN',
+  'od': 'od-IN',
+  'en-IN': 'en-IN',
+  'hi-IN': 'hi-IN',
+  'bn-IN': 'bn-IN',
+  'ta-IN': 'ta-IN',
+  'te-IN': 'te-IN',
+  'gu-IN': 'gu-IN',
+  'kn-IN': 'kn-IN',
+  'ml-IN': 'ml-IN',
+  'mr-IN': 'mr-IN',
+  'pa-IN': 'pa-IN',
+  'od-IN': 'od-IN'
+};
+
 class SarvamService {
   constructor() {
     this.apiKey = defaults.sarvam.apiKey;
@@ -19,31 +44,7 @@ class SarvamService {
     }
 
     try {
-      const localeMap = {
-        'en': 'en-IN',
-        'hi': 'hi-IN',
-        'bn': 'bn-IN',
-        'ta': 'ta-IN',
-        'te': 'te-IN',
-        'gu': 'gu-IN',
-        'kn': 'kn-IN',
-        'ml': 'ml-IN',
-        'mr': 'mr-IN',
-        'pa': 'pa-IN',
-        'od': 'od-IN',
-        'en-IN': 'en-IN',
-        'hi-IN': 'hi-IN',
-        'bn-IN': 'bn-IN',
-        'ta-IN': 'ta-IN',
-        'te-IN': 'te-IN',
-        'gu-IN': 'gu-IN',
-        'kn-IN': 'kn-IN',
-        'ml-IN': 'ml-IN',
-        'mr-IN': 'mr-IN',
-        'pa-IN': 'pa-IN',
-        'od-IN': 'od-IN'
-      };
-      const locale = localeMap[languageCode] || languageCode || 'en-IN';
+      const locale = SARVAM_LOCALE_MAP[languageCode] || languageCode || 'en-IN';
 
       // In production, Sarvam STT expects chunked multi-part form upload or raw payload
       // Let's implement standard Axios multipart upload for short audio durations
@@ -83,33 +84,7 @@ class SarvamService {
     }
 
     try {
-      // Mapping language strings to Sarvam standard locales
-      const localeMap = {
-        'en': 'en-IN',
-        'hi': 'hi-IN',
-        'bn': 'bn-IN',
-        'ta': 'ta-IN',
-        'te': 'te-IN',
-        'gu': 'gu-IN',
-        'kn': 'kn-IN',
-        'ml': 'ml-IN',
-        'mr': 'mr-IN',
-        'pa': 'pa-IN',
-        'od': 'od-IN',
-        'en-IN': 'en-IN',
-        'hi-IN': 'hi-IN',
-        'bn-IN': 'bn-IN',
-        'ta-IN': 'ta-IN',
-        'te-IN': 'te-IN',
-        'gu-IN': 'gu-IN',
-        'kn-IN': 'kn-IN',
-        'ml-IN': 'ml-IN',
-        'mr-IN': 'mr-IN',
-        'pa-IN': 'pa-IN',
-        'od-IN': 'od-IN'
-      };
-      
-      const locale = localeMap[languageCode] || languageCode || 'en-IN';
+      const locale = SARVAM_LOCALE_MAP[languageCode] || languageCode || 'en-IN';
 
       const response = await axios.post(
         `${this.apiBaseUrl}/text-to-speech`,

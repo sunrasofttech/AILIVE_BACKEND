@@ -239,9 +239,9 @@ class VobizSocketHandler {
           message: 'Call session finished. WebSocket closed.',
         });
 
-        // Decrement concurrency tracker
+        // Decrement concurrency tracker via ZSET deregistration
         if (session.campaignId) {
-          await QueueService.decrementActiveCalls(session.campaignId);
+          await QueueService.deregisterActiveCall(session.campaignId, session.id);
         }
 
         // Standardize transcript as a formatted text
@@ -269,7 +269,7 @@ class VobizSocketHandler {
           }
         }
 
-        // Publish event to Redis for AI Worker to analyze call logs
+        // Reliable report queuing
         const completionEvent = {
           callSessionId: session.id,
           userId: session.userId,
@@ -283,8 +283,12 @@ class VobizSocketHandler {
           recordingUrl: fileName ? `/uploads/${fileName}` : null,
         };
 
-        // Publish message
-        await redisClient.publish('call_completed', JSON.stringify(completionEvent));
+        // Enqueue report for worker processing (Reliable Queue)
+        await QueueService.enqueueReport(completionEvent);
+
+        // Clear memory references to prevent socket memory leaks
+        ws.audioChunks = null;
+        ws.transcriptChunks = null;
       }
     } catch (cleanError) {
       console.error('Error during call session cleanup:', cleanError);
