@@ -28,7 +28,7 @@ async function startAiWorker() {
  * Invokes Gemini, saves CallReport, adjusts campaign progress and plan limits
  */
 async function processCallAnalysis(event) {
-  const { callSessionId, userId, campaignId, vobizNumberId, customerId, transcript, duration } = event;
+  const { callSessionId, userId, campaignId, vobizNumberId, customerId, transcript, duration, recordingUrl } = event;
 
   try {
     // 1. Trigger Gemini Transcript Analysis
@@ -48,6 +48,7 @@ async function processCallAnalysis(event) {
       outcome: analysis.outcome,
       sentiment: analysis.sentiment,
       leadScore: analysis.leadScore,
+      recordingUrl,
     });
 
     // 3. Deduct call credit from merchant's subscription

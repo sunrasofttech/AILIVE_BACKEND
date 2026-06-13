@@ -19,6 +19,8 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 // Swagger Spec
 const swaggerSpec = require('./utils/swagger');
 
+const path = require('path');
+
 const app = express();
 
 // 1. Security & Body Parsing Middleware
@@ -28,6 +30,7 @@ app.use(helmet({
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // 2. Rate Limiting Middleware
 const globalLimiter = rateLimit({

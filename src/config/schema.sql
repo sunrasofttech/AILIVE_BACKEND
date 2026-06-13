@@ -320,6 +320,7 @@ CREATE TABLE IF NOT EXISTS `call_reports` (
   `outcome` VARCHAR(30) NULL, -- Interested, Not Interested, Callback Requested, Appointment Booked, Sale Closed, Wrong Number, No Answer
   `sentiment` VARCHAR(20) NULL, -- Positive, Neutral, Negative
   `lead_score` INT DEFAULT 0,
+  `recording_url` VARCHAR(255) NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `deleted_at` DATETIME NULL,

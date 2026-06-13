@@ -19,6 +19,32 @@ class SarvamService {
     }
 
     try {
+      const localeMap = {
+        'en': 'en-IN',
+        'hi': 'hi-IN',
+        'bn': 'bn-IN',
+        'ta': 'ta-IN',
+        'te': 'te-IN',
+        'gu': 'gu-IN',
+        'kn': 'kn-IN',
+        'ml': 'ml-IN',
+        'mr': 'mr-IN',
+        'pa': 'pa-IN',
+        'od': 'od-IN',
+        'en-IN': 'en-IN',
+        'hi-IN': 'hi-IN',
+        'bn-IN': 'bn-IN',
+        'ta-IN': 'ta-IN',
+        'te-IN': 'te-IN',
+        'gu-IN': 'gu-IN',
+        'kn-IN': 'kn-IN',
+        'ml-IN': 'ml-IN',
+        'mr-IN': 'mr-IN',
+        'pa-IN': 'pa-IN',
+        'od-IN': 'od-IN'
+      };
+      const locale = localeMap[languageCode] || languageCode || 'en-IN';
+
       // In production, Sarvam STT expects chunked multi-part form upload or raw payload
       // Let's implement standard Axios multipart upload for short audio durations
       const FormData = require('form-data');
@@ -27,7 +53,7 @@ class SarvamService {
         filename: 'chunk.wav',
         contentType: 'audio/wav',
       });
-      form.append('language_code', languageCode);
+      form.append('language_code', locale);
 
       const response = await axios.post(`${this.apiBaseUrl}/speech-to-text`, form, {
         headers: {
@@ -61,11 +87,26 @@ class SarvamService {
       const localeMap = {
         'en': 'en-IN',
         'hi': 'hi-IN',
-        'mr': 'mr-IN',
+        'bn': 'bn-IN',
         'ta': 'ta-IN',
         'te': 'te-IN',
+        'gu': 'gu-IN',
         'kn': 'kn-IN',
         'ml': 'ml-IN',
+        'mr': 'mr-IN',
+        'pa': 'pa-IN',
+        'od': 'od-IN',
+        'en-IN': 'en-IN',
+        'hi-IN': 'hi-IN',
+        'bn-IN': 'bn-IN',
+        'ta-IN': 'ta-IN',
+        'te-IN': 'te-IN',
+        'gu-IN': 'gu-IN',
+        'kn-IN': 'kn-IN',
+        'ml-IN': 'ml-IN',
+        'mr-IN': 'mr-IN',
+        'pa-IN': 'pa-IN',
+        'od-IN': 'od-IN'
       };
       
       const locale = localeMap[languageCode] || languageCode || 'en-IN';

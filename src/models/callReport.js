@@ -61,6 +61,11 @@ CallReport.init(
       defaultValue: 0,
       field: 'lead_score',
     },
+    recordingUrl: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'recording_url',
+    },
   },
   {
     sequelize,

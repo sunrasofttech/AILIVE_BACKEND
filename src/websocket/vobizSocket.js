@@ -61,6 +61,7 @@ class VobizSocketHandler {
 
       // Keep running transcript memory in memory
       const transcriptChunks = [];
+      const audioChunks = [];
 
       // 2. Instantiate Gemini Live Session
       const geminiSession = new GeminiLiveSession({
@@ -99,6 +100,7 @@ class VobizSocketHandler {
             // Stream audio chunk back to VoBiz WS
             if (ws.readyState === ws.OPEN) {
               ws.send(audioBuffer);
+              audioChunks.push(audioBuffer);
             }
           } catch (ttsErr) {
             console.error('Failed to synthesize agent speech:', ttsErr);
@@ -129,11 +131,13 @@ class VobizSocketHandler {
       ws.session = session;
       ws.geminiSession = geminiSession;
       ws.transcriptChunks = transcriptChunks;
+      ws.audioChunks = audioChunks;
 
       // 3. Handle incoming customer audio stream (Binary frames)
       ws.on('message', async (message, isBinary) => {
         try {
           if (isBinary) {
+            audioChunks.push(message);
             // Process audio bytes via Sarvam STT
             // Note: In real-world low latency, you'd buffer or stream chunks. 
             // Here we transcribe the received chunk.
@@ -245,6 +249,26 @@ class VobizSocketHandler {
           .map((c) => `${c.role === 'customer' ? 'Customer' : 'Agent'}: ${c.text}`)
           .join('\n');
 
+        // Compile conversation recording
+        let fileName = null;
+        if (ws.audioChunks && ws.audioChunks.length > 0) {
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            const uploadsDir = path.join(__dirname, '../../uploads');
+            if (!fs.existsSync(uploadsDir)) {
+              fs.mkdirSync(uploadsDir, { recursive: true });
+            }
+            fileName = `recording-${session.id}.wav`;
+            const filePath = path.join(uploadsDir, fileName);
+            const recordingBuffer = Buffer.concat(ws.audioChunks);
+            fs.writeFileSync(filePath, recordingBuffer);
+            console.log(`Saved call recording to ${filePath}`);
+          } catch (recordErr) {
+            console.error('Failed to save call recording:', recordErr);
+          }
+        }
+
         // Publish event to Redis for AI Worker to analyze call logs
         const completionEvent = {
           callSessionId: session.id,
@@ -256,6 +280,7 @@ class VobizSocketHandler {
           duration: Math.round(
             (freshSession.endTime.getTime() - freshSession.startTime.getTime()) / 1000
           ),
+          recordingUrl: fileName ? `/uploads/${fileName}` : null,
         };
 
         // Publish message
