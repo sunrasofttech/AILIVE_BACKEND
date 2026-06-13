@@ -8,6 +8,7 @@ const createAgentSchema = Joi.object({
   voiceId: Joi.string().uuid().required(),
   categoryId: Joi.string().uuid().optional(),
   activeStatus: Joi.boolean().default(true),
+  allowInterruption: Joi.boolean().default(true),
 });
 
 const updateAgentSchema = Joi.object({
@@ -18,6 +19,7 @@ const updateAgentSchema = Joi.object({
   voiceId: Joi.string().uuid().optional(),
   categoryId: Joi.string().uuid().optional(),
   activeStatus: Joi.boolean().optional(),
+  allowInterruption: Joi.boolean().optional(),
 });
 
 module.exports = {

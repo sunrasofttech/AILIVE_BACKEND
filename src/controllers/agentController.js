@@ -80,7 +80,7 @@ class AgentController {
         return ResponseBuilder.error(res, error.details[0].message, 400);
       }
 
-      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus } = value;
+      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus, allowInterruption } = value;
 
       // Validate voice exists
       const voice = await Voice.findByPk(voiceId);
@@ -106,6 +106,7 @@ class AgentController {
         categoryId: categoryId || req.user.categoryId,
         isCustom: true,
         activeStatus,
+        allowInterruption,
       });
 
       return ResponseBuilder.success(res, agent, 'Voice Agent created successfully', 201);
@@ -134,7 +135,7 @@ class AgentController {
         return ResponseBuilder.error(res, 'Forbidden: You cannot modify default preloaded agents', 403);
       }
 
-      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus } = value;
+      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus, allowInterruption } = value;
 
       if (voiceId) {
         const voice = await Voice.findByPk(voiceId);
@@ -158,6 +159,7 @@ class AgentController {
         voiceId: voiceId !== undefined ? voiceId : agent.voiceId,
         categoryId: categoryId !== undefined ? categoryId : agent.categoryId,
         activeStatus: activeStatus !== undefined ? activeStatus : agent.activeStatus,
+        allowInterruption: allowInterruption !== undefined ? allowInterruption : agent.allowInterruption,
       });
 
       return ResponseBuilder.success(res, agent, 'Agent details updated successfully');

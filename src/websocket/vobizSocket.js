@@ -71,6 +71,17 @@ class VobizSocketHandler {
             console.log(`[Gemini Response]: ${text}`);
             transcriptChunks.push({ role: 'agent', text });
 
+            // Track agent speaking state
+            ws.isAgentSpeaking = true;
+            const wordCount = text.split(/\s+/).filter(Boolean).length;
+            const durationMs = Math.max(1500, wordCount * 450); // ~450ms per word, min 1.5s
+            if (ws.speakingTimeout) {
+              clearTimeout(ws.speakingTimeout);
+            }
+            ws.speakingTimeout = setTimeout(() => {
+              ws.isAgentSpeaking = false;
+            }, durationMs);
+
             await CallLog.create({
               callSessionId: session.id,
               logLevel: 'info',
@@ -129,6 +140,25 @@ class VobizSocketHandler {
             );
 
             if (transcript && transcript.trim()) {
+              // Enforce interruption logic
+              if (!session.agent.allowInterruption && ws.isAgentSpeaking) {
+                console.log(`[Interruption Blocked] Customer spoke: "${transcript}" but agent is speaking.`);
+                await CallLog.create({
+                  callSessionId: session.id,
+                  logLevel: 'info',
+                  message: `Customer spoke: "${transcript}" (interruption blocked because agent is speaking)`,
+                });
+                return;
+              }
+
+              // Interruption allowed: if agent was speaking, reset state
+              if (ws.isAgentSpeaking) {
+                ws.isAgentSpeaking = false;
+                if (ws.speakingTimeout) {
+                  clearTimeout(ws.speakingTimeout);
+                }
+              }
+
               console.log(`[Customer Speech]: ${transcript}`);
               transcriptChunks.push({ role: 'customer', text: transcript });
 
@@ -180,6 +210,11 @@ class VobizSocketHandler {
     if (!session) return;
 
     try {
+      // Clear speaking timeout
+      if (ws.speakingTimeout) {
+        clearTimeout(ws.speakingTimeout);
+      }
+
       // Disconnect Gemini
       if (geminiSession) {
         geminiSession.close();

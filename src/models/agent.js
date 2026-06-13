@@ -52,6 +52,11 @@ Agent.init(
       defaultValue: true,
       field: 'active_status',
     },
+    allowInterruption: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      field: 'allow_interruption',
+    },
   },
   {
     sequelize,
