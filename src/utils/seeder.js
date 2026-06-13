@@ -1,4 +1,5 @@
-const { Voice } = require('../models');
+const { Voice, Category, Plan, User, Admin, Subscription } = require('../models');
+const bcrypt = require('bcryptjs');
 
 const bulbulVoices = [
   { name: 'Shubh', voiceId: 'shubh', gender: 'male', language: 'hi-IN', sampleText: 'नमस्ते, यह मेरी आवाज़ का एक पूर्वावलोकन है। आशा है कि आपको यह पसंद आएगा!' },
@@ -46,6 +47,7 @@ const bulbulVoices = [
 
 
 async function seedVoices() {
+  // 1. Seed voices
   console.log('Seeding bulbul:v3 voices into the database...');
   for (const voice of bulbulVoices) {
     const [record, created] = await Voice.findOrCreate({
@@ -54,6 +56,90 @@ async function seedVoices() {
     });
   }
   console.log('Seeding bulbul:v3 voices finished.');
+
+  // 2. Seed default Category
+  console.log('Seeding default General category...');
+  const firstVoice = await Voice.findOne({ where: { voiceId: 'shubh' } });
+  const [generalCategory, catCreated] = await Category.findOrCreate({
+    where: { name: 'General' },
+    defaults: {
+      name: 'General',
+      defaultPrompt: 'You are a helpful customer service assistant.',
+      defaultVoiceId: firstVoice ? firstVoice.id : null,
+      defaultLanguage: 'en-IN',
+    }
+  });
+  console.log('Default category seeded.');
+
+  // 3. Seed default Starter Plan
+  console.log('Seeding default Starter plan...');
+  const [starterPlan, planCreated] = await Plan.findOrCreate({
+    where: { name: 'Starter' },
+    defaults: {
+      name: 'Starter',
+      price: 0.00,
+      callLimit: 100,
+      maxConcurrentCalls: 1,
+    }
+  });
+  console.log('Default Starter plan seeded.');
+
+  // 4. Seed Super Admin (admin@example.com / admin123)
+  console.log('Seeding Super Admin...');
+  const adminEmail = 'admin@example.com';
+  const existingAdmin = await Admin.findOne({ where: { email: adminEmail } });
+  if (!existingAdmin) {
+    const salt = await bcrypt.genSalt(10);
+    const adminPasswordHash = await bcrypt.hash('admin123', salt);
+    await Admin.create({
+      email: adminEmail,
+      passwordHash: adminPasswordHash,
+      firstName: 'System',
+      lastName: 'Administrator',
+      role: 'super_admin',
+      isVerified: true,
+    });
+    console.log('Super Admin seeded successfully.');
+  } else {
+    console.log('Super Admin already exists.');
+  }
+
+  // 5. Seed Merchant (merchant@example.com / merchant123)
+  console.log('Seeding Merchant...');
+  const merchantEmail = 'merchant@example.com';
+  const existingMerchant = await User.findOne({ where: { email: merchantEmail } });
+  if (!existingMerchant) {
+    const salt = await bcrypt.genSalt(10);
+    const merchantPasswordHash = await bcrypt.hash('merchant123', salt);
+    const merchantUser = await User.create({
+      email: merchantEmail,
+      passwordHash: merchantPasswordHash,
+      businessName: 'Default Merchant Business',
+      categoryId: generalCategory.id,
+      role: 'merchant',
+      isVerified: true,
+    });
+    console.log('Merchant user seeded successfully.');
+
+    // Attach Active Subscription
+    const now = new Date();
+    const expiryDate = new Date();
+    expiryDate.setFullYear(now.getFullYear() + 1); // 1 year expiry for default merchant
+
+    await Subscription.create({
+      userId: merchantUser.id,
+      planId: starterPlan.id,
+      activePlan: starterPlan.name,
+      startDate: now,
+      expiryDate,
+      callsUsed: 0,
+      callsRemaining: starterPlan.callLimit,
+      status: 'active',
+    });
+    console.log('Merchant active subscription seeded successfully.');
+  } else {
+    console.log('Merchant user already exists.');
+  }
 }
 
 module.exports = { seedVoices, bulbulVoices };

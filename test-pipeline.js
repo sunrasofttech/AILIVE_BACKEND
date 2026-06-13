@@ -69,18 +69,21 @@ async function runIntegrationTest() {
       defaultLanguage: 'en',
     });
 
-    const starterPlan = await Plan.create({
-      name: 'Starter',
-      price: 0.00,
-      callLimit: 5,
-      maxConcurrentCalls: 1,
-    });
+    let starterPlan = await Plan.findOne({ where: { name: 'Starter' } });
+    if (!starterPlan) {
+      starterPlan = await Plan.create({
+        name: 'Starter',
+        price: 0.00,
+        callLimit: 5,
+        maxConcurrentCalls: 1,
+      });
+    }
     console.log('Baseline data seeded.');
 
     // 3. Register Merchant
     console.log('Registering merchant...');
     const user = await User.create({
-      email: 'merchant@example.com',
+      email: 'merchant-pipeline@example.com',
       passwordHash: 'hashed_password_123',
       businessName: 'Apex Legal Partners',
       categoryId: lawyerCategory.id,
