@@ -23,7 +23,8 @@ async function sendSMSVerification(mobile, otp) {
   try {
     // Extract last 10 digits to handle any +91 prefixes passed from client
     const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
-    const url = `https://2factor.in/API/V1/${apiKey}/SMS/+91${cleanMobile}/${otp}/SUNRAT`;
+    //const url = `https://2factor.in/API/V1/${apiKey}/SMS/+91${cleanMobile}/${otp}/SUNRAT`;
+    const url = `https://2factor.in/API/V1/${apiKey}/SMS/+91${cleanMobile}/${otp}/OTP`;
 
     const response = await axios.get(url);
     
