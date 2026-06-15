@@ -84,6 +84,7 @@ async function runIntegrationTest() {
     console.log('Registering merchant...');
     const user = await User.create({
       email: 'merchant-pipeline@example.com',
+      mobile: '+919999999992',
       passwordHash: 'hashed_password_123',
       businessName: 'Apex Legal Partners',
       categoryId: lawyerCategory.id,

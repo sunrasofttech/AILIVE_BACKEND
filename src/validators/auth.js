@@ -5,6 +5,10 @@ const merchantRegisterSchema = Joi.object({
     'string.email': 'Please enter a valid email address',
     'any.required': 'Email is required',
   }),
+  mobile: Joi.string().pattern(/^\+?[1-9]\d{1,14}$/).required().messages({
+    'string.pattern.base': 'Please enter a valid international mobile number',
+    'any.required': 'Mobile number is required',
+  }),
   password: Joi.string().min(6).required().messages({
     'string.min': 'Password must be at least 6 characters long',
     'any.required': 'Password is required',
@@ -21,6 +25,7 @@ const merchantRegisterSchema = Joi.object({
 
 const adminRegisterSchema = Joi.object({
   email: Joi.string().email().required(),
+  mobile: Joi.string().pattern(/^\+?[1-9]\d{1,14}$/).required(),
   password: Joi.string().min(6).required(),
   firstName: Joi.string().optional(),
   lastName: Joi.string().optional(),
@@ -43,8 +48,8 @@ const resetPasswordSchema = Joi.object({
   role: Joi.string().valid('merchant', 'super_admin').default('merchant'),
 });
 
-const verifyEmailSchema = Joi.object({
-  token: Joi.string().required(),
+const verifyOtpSchema = Joi.object({
+  otp: Joi.string().length(6).required(),
   role: Joi.string().valid('merchant', 'super_admin').default('merchant'),
 });
 
@@ -54,5 +59,5 @@ module.exports = {
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-  verifyEmailSchema,
+  verifyOtpSchema,
 };

@@ -39,6 +39,8 @@ const bulbulVoices = [
   { name: 'Rehan', voiceId: 'rehan', gender: 'male', language: 'hi-IN', sampleText: 'नमस्ते, मैं रेहान हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।' },
   { name: 'Soham', voiceId: 'soham', gender: 'male', language: 'hi-IN', sampleText: 'नमस्ते, मैं सोहम हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।' },
   { name: 'Rupali', voiceId: 'rupali', gender: 'female', language: 'hi-IN', sampleText: 'नमस्ते, मैं रूपाली हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।' },
+  { name: 'Amelia', voiceId: 'amelia', gender: 'female', language: 'en-IN', sampleText: 'Hello! This is a preview of my voice. I am Amelia, your friendly assistant.' },
+  { name: 'Sophia', voiceId: 'sophia', gender: 'female', language: 'en-IN', sampleText: 'Hello! This is a preview of my voice. I am Sophia, ready to assist you today.' },
 ].map(v => ({
   ...v,
   provider: 'sarvam',
@@ -50,39 +52,73 @@ async function seedVoices() {
   // 1. Seed voices
   console.log('Seeding bulbul:v3 voices into the database...');
   for (const voice of bulbulVoices) {
-    const [record, created] = await Voice.findOrCreate({
+    await Voice.findOrCreate({
       where: { voiceId: voice.voiceId },
       defaults: voice
     });
   }
   console.log('Seeding bulbul:v3 voices finished.');
 
-  // 2. Seed default Category
-  console.log('Seeding default General category...');
-  const firstVoice = await Voice.findOne({ where: { voiceId: 'shubh' } });
-  const [generalCategory, catCreated] = await Category.findOrCreate({
-    where: { name: 'General' },
-    defaults: {
-      name: 'General',
+  // 2. Seed default Categories
+  console.log('Seeding default categories...');
+  const shubhVoice = await Voice.findOne({ where: { voiceId: 'shubh' } });
+  const adityaVoice = await Voice.findOne({ where: { voiceId: 'aditya' } });
+
+  const categoriesToSeed = [
+    {
+      name: 'Customer Support',
       defaultPrompt: 'You are a helpful customer service assistant.',
-      defaultVoiceId: firstVoice ? firstVoice.id : null,
+      defaultVoiceId: shubhVoice ? shubhVoice.id : null,
+      defaultLanguage: 'en-IN',
+    },
+    {
+      name: 'Sales & Marketing',
+      defaultPrompt: 'You are an enthusiastic sales agent representing our product. Pitch the product and try to schedule a demo.',
+      defaultVoiceId: adityaVoice ? adityaVoice.id : null,
+      defaultLanguage: 'en-IN',
+    },
+    {
+      name: 'Appointment Booking',
+      defaultPrompt: 'You are a receptionist scheduling appointments. Ask the caller for their preferred date and time, and confirm availability.',
+      defaultVoiceId: shubhVoice ? shubhVoice.id : null,
+      defaultLanguage: 'en-IN',
+    },
+    {
+      name: 'Feedback Collection',
+      defaultPrompt: 'You are a feedback collector. Ask the caller about their recent experience with our service and rate it from 1 to 5.',
+      defaultVoiceId: adityaVoice ? adityaVoice.id : null,
       defaultLanguage: 'en-IN',
     }
-  });
-  console.log('Default category seeded.');
+  ];
 
-  // 3. Seed default Starter Plan
-  console.log('Seeding default Starter plan...');
-  const [starterPlan, planCreated] = await Plan.findOrCreate({
-    where: { name: 'Starter' },
-    defaults: {
-      name: 'Starter',
-      price: 0.00,
-      callLimit: 100,
-      maxConcurrentCalls: 1,
-    }
-  });
-  console.log('Default Starter plan seeded.');
+  const categories = {};
+  for (const cat of categoriesToSeed) {
+    const [record] = await Category.findOrCreate({
+      where: { name: cat.name },
+      defaults: cat
+    });
+    categories[cat.name] = record;
+  }
+  console.log('Categories seeded.');
+
+  // 3. Seed default Plans
+  console.log('Seeding default plans...');
+  const plansToSeed = [
+    { name: 'Starter', price: 0.00, callLimit: 5, maxConcurrentCalls: 1 },
+    { name: 'Basic', price: 19.00, callLimit: 500, maxConcurrentCalls: 2 },
+    { name: 'Pro', price: 49.00, callLimit: 2000, maxConcurrentCalls: 5 },
+    { name: 'Enterprise', price: 199.00, callLimit: 10000, maxConcurrentCalls: 10 },
+  ];
+
+  const plans = {};
+  for (const plan of plansToSeed) {
+    const [record] = await Plan.findOrCreate({
+      where: { name: plan.name },
+      defaults: plan
+    });
+    plans[plan.name] = record;
+  }
+  console.log('Default plans seeded.');
 
   // 4. Seed Super Admin (admin@example.com / admin123)
   console.log('Seeding Super Admin...');
@@ -93,6 +129,7 @@ async function seedVoices() {
     const adminPasswordHash = await bcrypt.hash('admin123', salt);
     await Admin.create({
       email: adminEmail,
+      mobile: '+919876543210',
       passwordHash: adminPasswordHash,
       firstName: 'System',
       lastName: 'Administrator',
@@ -113,9 +150,10 @@ async function seedVoices() {
     const merchantPasswordHash = await bcrypt.hash('merchant123', salt);
     const merchantUser = await User.create({
       email: merchantEmail,
+      mobile: '+919876543211',
       passwordHash: merchantPasswordHash,
       businessName: 'Default Merchant Business',
-      categoryId: generalCategory.id,
+      categoryId: categories['Customer Support'] ? categories['Customer Support'].id : null,
       role: 'merchant',
       isVerified: true,
     });
@@ -126,17 +164,20 @@ async function seedVoices() {
     const expiryDate = new Date();
     expiryDate.setFullYear(now.getFullYear() + 1); // 1 year expiry for default merchant
 
-    await Subscription.create({
-      userId: merchantUser.id,
-      planId: starterPlan.id,
-      activePlan: starterPlan.name,
-      startDate: now,
-      expiryDate,
-      callsUsed: 0,
-      callsRemaining: starterPlan.callLimit,
-      status: 'active',
-    });
-    console.log('Merchant active subscription seeded successfully.');
+    const starterPlanRecord = plans['Starter'];
+    if (starterPlanRecord) {
+      await Subscription.create({
+        userId: merchantUser.id,
+        planId: starterPlanRecord.id,
+        activePlan: starterPlanRecord.name,
+        startDate: now,
+        expiryDate,
+        callsUsed: 0,
+        callsRemaining: starterPlanRecord.callLimit,
+        status: 'active',
+      });
+      console.log('Merchant active subscription seeded successfully.');
+    }
   } else {
     console.log('Merchant user already exists.');
   }

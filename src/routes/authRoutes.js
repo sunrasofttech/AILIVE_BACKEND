@@ -15,8 +15,8 @@ router.post('/login', AuthController.login);
 // Refresh Access Token
 router.post('/refresh-token', AuthController.refreshToken);
 
-// Verify Email Address
-router.post('/verify-email', AuthController.verifyEmail);
+// Verify OTP via SMS
+router.post('/verify-otp', AuthController.verifyOtp);
 
 // Forgot Password Flow
 router.post('/forgot-password', AuthController.forgotPassword);

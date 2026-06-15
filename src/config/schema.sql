@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS `plans` (
 CREATE TABLE IF NOT EXISTS `admins` (
   `id` VARCHAR(36) NOT NULL,
   `email` VARCHAR(100) NOT NULL UNIQUE,
+  `mobile` VARCHAR(20) NOT NULL UNIQUE,
   `password_hash` VARCHAR(255) NOT NULL,
   `first_name` VARCHAR(50) NULL,
   `last_name` VARCHAR(50) NULL,
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS `admins` (
 CREATE TABLE IF NOT EXISTS `users` (
   `id` VARCHAR(36) NOT NULL,
   `email` VARCHAR(100) NOT NULL UNIQUE,
+  `mobile` VARCHAR(20) NOT NULL UNIQUE,
   `password_hash` VARCHAR(255) NOT NULL,
   `business_name` VARCHAR(100) NOT NULL,
   `category_id` VARCHAR(36) NULL,
@@ -364,3 +366,75 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
   PRIMARY KEY (`id`),
   INDEX `idx_audit_logs_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==========================================
+-- DEFAULT SEED DATA
+-- ==========================================
+
+-- Seed default voices
+INSERT INTO `voices` (`id`, `name`, `provider`, `voice_id`, `language`, `gender`, `is_custom`, `sample_text`, `user_id`) VALUES
+('c0000000-0000-0000-0000-000000000001', 'Shubh', 'sarvam', 'shubh', 'hi-IN', 'male', 0, 'नमस्ते, यह मेरी आवाज़ का एक पूर्वावलोकन है। आशा है कि आपको यह पसंद आएगा!', NULL),
+('c0000000-0000-0000-0000-000000000002', 'Aditya', 'sarvam', 'aditya', 'en-IN', 'male', 0, 'Hello! This is a preview of my voice. I hope you find it suitable for your agent.', NULL),
+('c0000000-0000-0000-0000-000000000003', 'Ritu', 'sarvam', 'ritu', 'ta-IN', 'female', 0, 'வணக்கம், இது எனது குரலின் முன்னோட்டம். இது உங்களுக்கு பிடிக்கும் என்று நம்புகிறேன்!', NULL),
+('c0000000-0000-0000-0000-000000000004', 'Priya', 'sarvam', 'priya', 'te-IN', 'female', 0, 'నమస్కారం, ఇది నా వాయిస్ ప్రివ్యూ. ఇది మీకు నచ్చుతుందని ఆశిస్తున్నాను!', NULL),
+('c0000000-0000-0000-0000-000000000005', 'Neha', 'sarvam', 'neha', 'bn-IN', 'female', 0, 'নমস্কার, এটি আমার কণ্ঠস্বরের একটি প্রিভিউ। আশা করি আপনার এটি ভালো লাগবে!', NULL),
+('c0000000-0000-0000-0000-000000000006', 'Rahul', 'sarvam', 'rahul', 'gu-IN', 'male', 0, 'નમસ્તે, આ મારા અવાજનું પૂર્વાવલોકન છે. આશા છે કે તમને તે ગમશે!', NULL),
+('c0000000-0000-0000-0000-000000000007', 'Pooja', 'sarvam', 'pooja', 'kn-IN', 'female', 0, 'ನಮಸ್ಕಾರ, ಇದು ನನ್ನ ಧ್ವನಿಯ ಮುನ್ನೋಟವಾಗಿದೆ. ಇದು ನಿಮಗೆ ಇಷ್ಟವಾಗುತ್ತದೆ ಎಂದು ಭಾವಿಸುತ್ತೇನೆ!', NULL),
+('c0000000-0000-0000-0000-000000000008', 'Rohan', 'sarvam', 'rohan', 'ml-IN', 'male', 0, 'നമസ്കാരം, ഇത് എന്റെ ശബ്ദത്തിന്റെ പ്രിവ്യൂ ആണ്. നിങ്ങൾക്ക് ഇത് ഇഷ്ടപ്പെടുമെന്ന് പ്രതീക്ഷിക്കുന്നു!', NULL),
+('c0000000-0000-0000-0000-000000000009', 'Simran', 'sarvam', 'simran', 'mr-IN', 'female', 0, 'नमस्कार, हा माझ्या आवाजाचा एक पूर्वदृश्य आहे. आशा आहे की तुम्हाला हे आवडेल!', NULL),
+('c0000000-0000-0000-0000-000000000010', 'Kavya', 'sarvam', 'kavya', 'pa-IN', 'female', 0, 'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਇਹ ਮੇਰੀ ਆਵਾਜ਼ ਦਾ ਇੱਕ ਪੂਰਵਦਰਸ਼ਨ ਹੈ। ਉਮੀਦ ਹੈ ਕਿ ਤੁਹਾਨੂੰ ਇਹ ਪਸੰਦ ਆਵੇਗਾ!', NULL),
+('c0000000-0000-0000-0000-000000000011', 'Amit', 'sarvam', 'amit', 'od-IN', 'male', 0, 'ନମସ୍କାର, ଏହା ମୋର ସ୍ୱରର ଏକ ପୂର୍ବାବଲୋକନ ଅଟେ | ଆଶା କରେ ଆପଣଙ୍କୁ ଏହା ପସନ୍ଦ ଆସିବ!', NULL),
+('c0000000-0000-0000-0000-000000000012', 'Dev', 'sarvam', 'dev', 'hi-IN', 'male', 0, 'नमस्ते, मैं देव हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000013', 'Ishita', 'sarvam', 'ishita', 'hi-IN', 'female', 0, 'नमस्ते, मैं इशीलता हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000014', 'Shreya', 'sarvam', 'shreya', 'hi-IN', 'female', 0, 'नमस्ते, मैं श्रेया हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000015', 'Ratan', 'sarvam', 'ratan', 'hi-IN', 'male', 0, 'नमस्ते, मैं रतन हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000016', 'Varun', 'sarvam', 'varun', 'hi-IN', 'male', 0, 'नमस्ते, मैं वरुण हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000017', 'Manan', 'sarvam', 'manan', 'hi-IN', 'male', 0, 'नमस्ते, मैं मनन हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000018', 'Sumit', 'sarvam', 'sumit', 'hi-IN', 'male', 0, 'नमस्ते, मैं सुमित हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000019', 'Roopa', 'sarvam', 'roopa', 'hi-IN', 'female', 0, 'नमस्ते, मैं रूपा हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000020', 'Kabir', 'sarvam', 'kabir', 'hi-IN', 'male', 0, 'नमस्ते, मैं कबीर हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000021', 'Aayan', 'sarvam', 'aayan', 'hi-IN', 'male', 0, 'नमस्ते, मैं अयान हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000022', 'Ashutosh', 'sarvam', 'ashutosh', 'hi-IN', 'male', 0, 'नमस्ते, मैं आशुतोष हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000023', 'Advait', 'sarvam', 'advait', 'hi-IN', 'male', 0, 'नमस्ते, मैं अद्वैत हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000024', 'Anand', 'sarvam', 'anand', 'hi-IN', 'male', 0, 'नमस्ते, मैं आनंद हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000025', 'Tanya', 'sarvam', 'tanya', 'hi-IN', 'female', 0, 'नमस्ते, मैं तान्या हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000026', 'Tarun', 'sarvam', 'tarun', 'hi-IN', 'male', 0, 'नमस्ते, मैं तरुण हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000027', 'Sunny', 'sarvam', 'sunny', 'hi-IN', 'male', 0, 'नमस्ते, मैं सनी हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000028', 'Mani', 'sarvam', 'mani', 'hi-IN', 'male', 0, 'नमस्ते, मैं मनी हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000029', 'Gokul', 'sarvam', 'gokul', 'hi-IN', 'male', 0, 'नमस्ते, मैं गोकुल हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000030', 'Vijay', 'sarvam', 'vijay', 'hi-IN', 'male', 0, 'नमस्ते, मैं विजय हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000031', 'Shruti', 'sarvam', 'shruti', 'hi-IN', 'female', 0, 'नमस्ते, मैं श्रुति हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000032', 'Suhani', 'sarvam', 'suhani', 'hi-IN', 'female', 0, 'नमस्ते, मैं सुहानी हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000033', 'Mohit', 'sarvam', 'mohit', 'hi-IN', 'male', 0, 'नमस्ते, मैं मोहित हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000034', 'Kavitha', 'sarvam', 'kavitha', 'hi-IN', 'female', 0, 'नमस्ते, मैं कविता हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000035', 'Rehan', 'sarvam', 'rehan', 'hi-IN', 'male', 0, 'नमस्ते, मैं रेहान हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000036', 'Soham', 'sarvam', 'soham', 'hi-IN', 'male', 0, 'नमस्ते, मैं सोहम हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000037', 'Rupali', 'sarvam', 'rupali', 'hi-IN', 'female', 0, 'नमस्ते, मैं रूपाली हूँ। यह मेरी आवाज़ का पूर्वावलोकन है।', NULL),
+('c0000000-0000-0000-0000-000000000038', 'Amelia', 'sarvam', 'amelia', 'en-IN', 'female', 0, 'Hello! This is a preview of my voice. I am Amelia, your friendly assistant.', NULL),
+('c0000000-0000-0000-0000-000000000039', 'Sophia', 'sarvam', 'sophia', 'en-IN', 'female', 0, 'Hello! This is a preview of my voice. I am Sophia, ready to assist you today.', NULL);
+
+-- Seed default categories
+INSERT INTO `categories` (`id`, `name`, `default_prompt`, `default_voice_id`, `default_language`, `default_agent_config`) VALUES
+('b0000000-0000-0000-0000-000000000001', 'Customer Support', 'You are a helpful customer service assistant.', 'c0000000-0000-0000-0000-000000000001', 'en-IN', NULL),
+('b0000000-0000-0000-0000-000000000002', 'Sales & Marketing', 'You are an enthusiastic sales agent representing our product. Pitch the product and try to schedule a demo.', 'c0000000-0000-0000-0000-000000000002', 'en-IN', NULL),
+('b0000000-0000-0000-0000-000000000003', 'Appointment Booking', 'You are a receptionist scheduling appointments. Ask the caller for their preferred date and time, and confirm availability.', 'c0000000-0000-0000-0000-000000000001', 'en-IN', NULL),
+('b0000000-0000-0000-0000-000000000004', 'Feedback Collection', 'You are a feedback collector. Ask the caller about their recent experience with our service and rate it from 1 to 5.', 'c0000000-0000-0000-0000-000000000002', 'en-IN', NULL);
+
+-- Seed default plans
+INSERT INTO `plans` (`id`, `name`, `price`, `call_limit`, `max_concurrent_calls`) VALUES
+('p0000000-0000-0000-0000-000000000001', 'Starter', 0.00, 5, 1),
+('p0000000-0000-0000-0000-000000000002', 'Basic', 19.00, 500, 2),
+('p0000000-0000-0000-0000-000000000003', 'Pro', 49.00, 2000, 5),
+('p0000000-0000-0000-0000-000000000004', 'Enterprise', 199.00, 10000, 10);
+
+-- Seed Super Admin
+INSERT INTO `admins` (`id`, `email`, `mobile`, `password_hash`, `first_name`, `last_name`, `role`, `is_verified`) VALUES
+('a0000000-0000-0000-0000-000000000001', 'admin@example.com', '+919876543210', '$2a$10$OMTjd0IfYG1oKrkFyNFz..RrMy/U9ExgsCSJ3pY5bfPiL30Izp6Fa', 'System', 'Administrator', 'super_admin', 1);
+
+-- Seed Merchant User
+INSERT INTO `users` (`id`, `email`, `mobile`, `password_hash`, `business_name`, `category_id`, `role`, `is_verified`) VALUES
+('u0000000-0000-0000-0000-000000000001', 'merchant@example.com', '+919876543211', '$2a$10$qb9BUT2e6m01rkg8w2upI.wEBvuKi3v6zCrRMxuqViVIvHF1atnom', 'Default Merchant Business', 'b0000000-0000-0000-0000-000000000001', 'merchant', 1);
+
+-- Seed Merchant Subscription
+INSERT INTO `subscriptions` (`id`, `user_id`, `plan_id`, `active_plan`, `start_date`, `expiry_date`, `calls_used`, `calls_remaining`, `status`) VALUES
+('s0000000-0000-0000-0000-000000000001', 'u0000000-0000-0000-0000-000000000001', 'p0000000-0000-0000-0000-000000000001', 'Starter', NOW(), DATE_ADD(NOW(), INTERVAL 1 YEAR), 0, 5, 'active');

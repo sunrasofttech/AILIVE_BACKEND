@@ -4,6 +4,7 @@ const { User, Admin, Subscription, Plan, Category } = require('../models');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/token');
 const ResponseBuilder = require('../utils/response');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/email');
+const { sendSMSVerification } = require('../utils/sms');
 
 function hashToken(token) {
   if (!token) return null;
@@ -15,7 +16,7 @@ const {
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-  verifyEmailSchema,
+  verifyOtpSchema,
 } = require('../validators/auth');
 
 class AuthController {
@@ -29,7 +30,7 @@ class AuthController {
         return ResponseBuilder.error(res, error.details[0].message, 400);
       }
 
-      const { email, password, businessName, categoryId } = value;
+      const { email, mobile, password, businessName, categoryId } = value;
 
       // 1. Check if category exists
       const category = await Category.findByPk(categoryId);
@@ -43,16 +44,22 @@ class AuthController {
         return ResponseBuilder.error(res, 'Email address already registered', 400);
       }
 
+      const existingMobile = await User.findOne({ where: { mobile } });
+      if (existingMobile) {
+        return ResponseBuilder.error(res, 'Mobile number already registered', 400);
+      }
+
       // 3. Hash Password
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
 
-      // 4. Generate verification token
-      const verificationToken = crypto.randomBytes(32).toString('hex');
+      // 4. Generate 6-digit verification OTP
+      const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
 
       // 5. Create Merchant User
       const merchant = await User.create({
         email,
+        mobile,
         passwordHash,
         businessName,
         categoryId,
@@ -86,13 +93,14 @@ class AuthController {
         status: 'active',
       });
 
-      // Send verification email in the background
-      await sendVerificationEmail(email, verificationToken);
+      // Send verification SMS in the background
+      await sendSMSVerification(mobile, verificationToken);
 
       // Response (Excludes password hash)
       const userResponse = {
         id: merchant.id,
         email: merchant.email,
+        mobile: merchant.mobile,
         businessName: merchant.businessName,
         categoryId: merchant.categoryId,
         isVerified: merchant.isVerified,
@@ -101,7 +109,7 @@ class AuthController {
       return ResponseBuilder.success(
         res,
         { user: userResponse },
-        'Merchant registered successfully. Please verify your email.',
+        'Merchant registered successfully. Please verify your mobile number with the OTP sent.',
         201
       );
     } catch (err) {
@@ -119,20 +127,26 @@ class AuthController {
         return ResponseBuilder.error(res, error.details[0].message, 400);
       }
 
-      const { email, password, firstName, lastName } = value;
+      const { email, mobile, password, firstName, lastName } = value;
 
       const existingAdmin = await Admin.findOne({ where: { email } });
       if (existingAdmin) {
         return ResponseBuilder.error(res, 'Admin email already registered', 400);
       }
 
+      const existingAdminMobile = await Admin.findOne({ where: { mobile } });
+      if (existingAdminMobile) {
+        return ResponseBuilder.error(res, 'Admin mobile already registered', 400);
+      }
+
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
 
-      const verificationToken = crypto.randomBytes(32).toString('hex');
+      const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
 
       const admin = await Admin.create({
         email,
+        mobile,
         passwordHash,
         firstName,
         lastName,
@@ -272,35 +286,35 @@ class AuthController {
   }
 
   /**
-   * Verify Email
+   * Verify OTP
    */
-  async verifyEmail(req, res, next) {
+  async verifyOtp(req, res, next) {
     try {
-      const { error, value } = verifyEmailSchema.validate(req.body);
+      const { error, value } = verifyOtpSchema.validate(req.body);
       if (error) {
         return ResponseBuilder.error(res, error.details[0].message, 400);
       }
 
-      const { token, role } = value;
+      const { otp, role } = value;
 
       if (role === 'super_admin') {
-        const admin = await Admin.findOne({ where: { verificationToken: token } });
+        const admin = await Admin.findOne({ where: { verificationToken: otp } });
         if (!admin) {
-          return ResponseBuilder.error(res, 'Invalid verification token', 400);
+          return ResponseBuilder.error(res, 'Invalid verification OTP', 400);
         }
         admin.isVerified = true;
         admin.verificationToken = null;
         await admin.save();
-        return ResponseBuilder.success(res, null, 'Admin email verified successfully');
+        return ResponseBuilder.success(res, null, 'Admin account verified successfully');
       } else {
-        const user = await User.findOne({ where: { verificationToken: token } });
+        const user = await User.findOne({ where: { verificationToken: otp } });
         if (!user) {
-          return ResponseBuilder.error(res, 'Invalid verification token', 400);
+          return ResponseBuilder.error(res, 'Invalid verification OTP', 400);
         }
         user.isVerified = true;
         user.verificationToken = null;
         await user.save();
-        return ResponseBuilder.success(res, null, 'Merchant email verified successfully');
+        return ResponseBuilder.success(res, null, 'Merchant account verified successfully');
       }
     } catch (err) {
       next(err);

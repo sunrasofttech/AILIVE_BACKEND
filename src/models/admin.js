@@ -18,6 +18,11 @@ Admin.init(
         isEmail: true,
       },
     },
+    mobile: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      unique: true,
+    },
     passwordHash: {
       type: DataTypes.STRING(255),
       allowNull: false,
