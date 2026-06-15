@@ -11,7 +11,7 @@ const sequelize = new Sequelize(
     host: defaults.db.host,
     port: defaults.db.port,
     dialect: 'mysql',
-    logging: isProduction ? false : console.log,
+    logging: defaults.db.logging ? console.log : false,
     pool: {
       max: 20,
       min: 2,

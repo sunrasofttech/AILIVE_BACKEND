@@ -91,6 +91,9 @@ module.exports = {
     get port() {
       return parseInt(process.env.DB_PORT || '3306', 10);
     },
+    get logging() {
+      return process.env.DB_LOGGING === 'true';
+    },
   },
 
   // JWT Configuration
