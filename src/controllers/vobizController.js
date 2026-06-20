@@ -21,6 +21,7 @@ class VobizController {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Stream url="${streamUrl}" keepCallAlive="true" />
+    <Wait length="3600" />
 </Response>`;
 
       res.set('Content-Type', 'text/xml');
