@@ -54,7 +54,7 @@ module.exports = {
   // VoBiz Service Configuration
   vobiz: {
     get apiUrl() {
-      return process.env.VOBIZ_API_URL || 'https://api.vobiz.example.com/v1';
+      return process.env.VOBIZ_API_URL || 'https://api.vobiz.ai/api/v1';
     },
     get encryptCredentials() {
       return process.env.ENCRYPT_CREDENTIALS === 'true';
