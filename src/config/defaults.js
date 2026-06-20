@@ -12,10 +12,10 @@ module.exports = {
   // WebSocket Server Configuration
   ws: {
     get port() {
-      return parseInt(process.env.WS_PORT || '8000', 10);
+      return parseInt(process.env.WS_PORT || process.env.PORT || '3000', 10);
     },
     get host() {
-      return process.env.WS_HOST || '127.0.0.1:8000';
+      return process.env.WS_HOST || `127.0.0.1:${this.port}`;
     },
   },
 
