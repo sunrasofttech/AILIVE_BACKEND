@@ -10,8 +10,8 @@ class VobizService {
   /**
    * Triggers an outbound call via VoBiz API
    * @param {object} params
-   * @param {string} params.apiKey - Merchant VoBiz API Key
-   * @param {string} params.apiSecret - Merchant VoBiz API Secret
+   * @param {string} params.apiKey - Merchant VoBiz Auth ID (X-Auth-ID)
+   * @param {string} params.apiSecret - Merchant VoBiz Auth Token (X-Auth-Token)
    * @param {string} params.fromNumber - Merchant VoBiz Number
    * @param {string} params.toNumber - Target Customer Mobile Number
    * @param {string} params.wsToken - WebSocket Token for audio streaming auth
@@ -27,28 +27,32 @@ class VobizService {
     }
 
     try {
-      const response = await axios.post(
-        `${this.apiUrl}/calls/outbound`,
-        {
-          from: fromNumber,
-          to: toNumber,
-          // VoBiz should connect its audio streaming websocket to our server with this token
-          stream_url: `wss://${defaults.ws.host}/ws/vobiz?token=${wsToken}`,
-          audio_format: 'linear16_16khz',
+      // VoBiz API expects: POST /api/v1/Account/{authId}/Call/
+      const authId = apiKey;
+      const authToken = apiSecret;
+      const url = `${this.apiUrl}/Account/${authId}/Call/`;
+
+      const answerUrl = `wss://${defaults.ws.host}/ws/vobiz?token=${wsToken}`;
+
+      const data = {
+        from: fromNumber,
+        to: toNumber.startsWith('+') ? toNumber.substring(1) : toNumber,
+        answer_url: answerUrl,
+        answer_method: 'POST',
+      };
+
+      const response = await axios.post(url, data, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-ID': authId,
+          'X-Auth-Token': authToken,
         },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'X-VoBiz-API-Key': apiKey,
-            'X-VoBiz-API-Secret': apiSecret,
-          },
-          timeout: 5000,
-        }
-      );
+        timeout: 10000,
+      });
 
       return {
         success: true,
-        callId: response.data.call_id || response.data.id,
+        callId: response.data.call_id || response.data.request_uuid || response.data.id,
       };
     } catch (error) {
       console.error('VoBiz API Outbound Trigger Failed:', error.response ? error.response.data : error.message);
