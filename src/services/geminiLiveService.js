@@ -40,7 +40,7 @@ class GeminiLiveSession {
     }
 
     const host = 'generativelanguage.googleapis.com';
-    const path = `/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+    const path = `/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
     const uri = `wss://${host}${path}`;
 
     this.ws = new WebSocket(uri);
