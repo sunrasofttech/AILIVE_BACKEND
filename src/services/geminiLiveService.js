@@ -1,13 +1,20 @@
-const WebSocket = require('ws');
+const axios = require('axios');
 const defaults = require('../config/defaults');
 
 class GeminiLiveSession {
   /**
-   * Represents an active bidirectional Gemini conversation session
+   * Represents an active Gemini conversation session using the REST generateContent API.
+   * Maintains multi-turn conversation history in memory for stateful dialogue.
+   * 
+   * This replaces the previous WebSocket BidiGenerateContent approach because
+   * all current Gemini Live API models (gemini-3.1-flash-live-preview, etc.)
+   * only support AUDIO output modality, which is incompatible with our
+   * Sarvam STT → Gemini TEXT → Sarvam TTS pipeline.
+   * 
    * @param {object} config
    * @param {string} config.systemPrompt - System instruction text
-   * @param {string} [config.model] - Gemini model identifier (e.g. gemini-2.5-flash)
-   * @param {function} config.onResponseText - Callback when assistant streams text
+   * @param {string} [config.model] - Gemini model identifier (e.g. gemini-3.5-flash)
+   * @param {function} config.onResponseText - Callback when assistant responds with text
    * @param {function} config.onError - Callback on error
    * @param {function} config.onClose - Callback on close
    */
@@ -17,20 +24,20 @@ class GeminiLiveSession {
     this.onResponseText = onResponseText;
     this.onError = onError;
     this.onClose = onClose;
-    
-    this.ws = null;
+
     this.apiKey = defaults.gemini.apiKey;
     this.isConnected = false;
+    this.conversationHistory = []; // Multi-turn conversation context
   }
 
   /**
-   * Establish WebSocket connection to Gemini Live Service
+   * Initialize the session (replaces WebSocket connect)
+   * Sends an initial greeting turn to kick off the conversation
    */
   connect() {
     if (!this.apiKey || this.apiKey === 'your_google_gemini_api_key') {
       console.warn('Google Gemini API Key is missing. Simulating Mock Gemini responses.');
       this.isConnected = true;
-      // Trigger a starting greeting mock response after a short delay
       setTimeout(() => {
         if (this.onResponseText) {
           this.onResponseText('Hello, I am your virtual agent. How can I help you today?');
@@ -39,120 +46,106 @@ class GeminiLiveSession {
       return;
     }
 
-    const host = 'generativelanguage.googleapis.com';
-    const path = `/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
-    const uri = `wss://${host}${path}`;
+    this.isConnected = true;
+    console.log(`Gemini REST session initialized with model: ${this.modelName}`);
 
-    this.ws = new WebSocket(uri);
-
-    this.ws.on('open', () => {
-      this.isConnected = true;
-      this._sendSetup();
-    });
-
-    this.ws.on('message', (data) => {
-      this._handleIncomingMessage(data);
-    });
-
-    this.ws.on('error', (err) => {
-      console.error('Gemini WS Error:', err);
-      if (this.onError) this.onError(err);
-    });
-
-    this.ws.on('close', (code, reason) => {
-      this.isConnected = false;
-      console.log(`Gemini WS Closed. Code: ${code}, Reason: ${reason}`);
-      if (this.onClose) this.onClose();
-    });
+    // Send an initial greeting request to start the conversation
+    this._sendToGemini('[Call connected. Greet the customer according to your instructions.]');
   }
 
   /**
-   * Send Setup configuration message
-   */
-  _sendSetup() {
-    const setupMsg = {
-      setup: {
-        model: this.modelName,
-        generationConfig: {
-          responseModalities: ['TEXT'], // Request text responses back (since STT/TTS handled in pipeline)
-        },
-        systemInstruction: {
-          parts: [
-            { text: this.systemPrompt },
-          ],
-        },
-      },
-    };
-    this.ws.send(JSON.stringify(setupMsg));
-  }
-
-  /**
-   * Parse messages received from Gemini Live
-   */
-  _handleIncomingMessage(data) {
-    try {
-      const parsed = JSON.parse(data.toString());
-
-      // Check if server responded with content
-      if (parsed.serverContent && parsed.serverContent.modelTurn) {
-        const parts = parsed.serverContent.modelTurn.parts;
-        if (parts && parts.length > 0) {
-          let chunkText = '';
-          for (const part of parts) {
-            if (part.text) {
-              chunkText += part.text;
-            }
-          }
-          if (chunkText && this.onResponseText) {
-            this.onResponseText(chunkText);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to parse Gemini Live WS Message:', error);
-    }
-  }
-
-  /**
-   * Send user speech text to Gemini Live
+   * Send user speech text to Gemini
    * @param {string} text - Transcription of user's utterance
    */
   sendUserTurn(text) {
     if (!this.isConnected) {
-      console.error('Cannot send turn: Gemini Live Session is not connected');
+      console.error('Cannot send turn: Gemini session is not connected');
       return;
     }
 
     if (!this.apiKey || this.apiKey === 'your_google_gemini_api_key') {
-      // Simulate mock response
       this._simulateMockResponse(text);
       return;
     }
 
-    const clientMsg = {
-      clientContent: {
-        turns: [
-          {
-            role: 'user',
-            parts: [
-              { text },
-            ],
-          },
-        ],
-        turnComplete: true,
-      },
-    };
-    this.ws.send(JSON.stringify(clientMsg));
+    this._sendToGemini(text);
   }
 
   /**
-   * Terminate connection
+   * Send a message to Gemini REST API and handle the response
+   * @param {string} userText - The user's message text
+   */
+  async _sendToGemini(userText) {
+    try {
+      // Add user turn to conversation history
+      this.conversationHistory.push({
+        role: 'user',
+        parts: [{ text: userText }],
+      });
+
+      const requestBody = {
+        systemInstruction: {
+          parts: [{ text: this.systemPrompt }],
+        },
+        contents: this.conversationHistory,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 256,
+        },
+      };
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this.apiKey}`;
+
+      const response = await axios.post(url, requestBody, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+
+      // Extract text from response
+      const candidates = response.data?.candidates;
+      let responseText = '';
+
+      if (candidates && candidates.length > 0) {
+        const parts = candidates[0]?.content?.parts;
+        if (parts) {
+          for (const part of parts) {
+            if (part.text) {
+              responseText += part.text;
+            }
+          }
+        }
+      }
+
+      if (responseText) {
+        // Add model response to conversation history for multi-turn context
+        this.conversationHistory.push({
+          role: 'model',
+          parts: [{ text: responseText }],
+        });
+
+        console.log(`[Gemini Response]: ${responseText}`);
+        if (this.onResponseText) {
+          this.onResponseText(responseText);
+        }
+      } else {
+        console.warn('Gemini returned empty response');
+      }
+    } catch (error) {
+      const errMsg = error.response?.data?.error?.message || error.message;
+      console.error('Gemini REST API Error:', errMsg);
+      if (this.onError) {
+        this.onError(new Error(errMsg));
+      }
+    }
+  }
+
+  /**
+   * Terminate session
    */
   close() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.close();
-    }
     this.isConnected = false;
+    this.conversationHistory = [];
+    if (this.onClose) this.onClose();
   }
 
   /**
