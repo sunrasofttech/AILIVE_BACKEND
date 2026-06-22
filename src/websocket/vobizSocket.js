@@ -197,23 +197,28 @@ class VobizSocketHandler {
       ws.transcriptChunks = transcriptChunks;
       ws.audioChunks = audioChunks;
 
-      // Audio input buffer for debounced STT
-      // VoBiz sends many tiny 10ms chunks — we accumulate and only transcribe
-      // after 500ms of silence (end-of-utterance detection)
+      // Audio input buffer — dual flush triggers:
+      //  1. Silence debounce: flush after 200ms of no new audio frames
+      //  2. Max duration:     flush after 2s of continuous speech (don't wait for pause)
       let audioInputBuffer = [];
       let silenceTimer = null;
-      const SILENCE_TIMEOUT_MS = 300; // ms of silence before transcribing (lower = faster response)
-      const MIN_BUFFER_BYTES = 1600;  // ~50ms of audio at 16kHz L16 minimum
+      let maxDurationTimer = null;
+      const SILENCE_TIMEOUT_MS = 200;   // flush after 200ms pause
+      const MAX_BUFFER_DURATION_MS = 2000; // flush every 2s of continuous speech
+      const MIN_BUFFER_BYTES = 1600;    // ~50ms at 16kHz L16 minimum
 
       const flushAudioBuffer = async () => {
+        if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+        if (maxDurationTimer) { clearTimeout(maxDurationTimer); maxDurationTimer = null; }
+
         if (audioInputBuffer.length === 0) return;
         const combinedBuffer = Buffer.concat(audioInputBuffer);
-        audioInputBuffer = [];
+        audioInputBuffer = []; // reset immediately so new chunks accumulate cleanly
 
-        if (combinedBuffer.length < MIN_BUFFER_BYTES) {
-          console.log(`[STT] Buffer too small (${combinedBuffer.length} bytes), skipping.`);
-          return;
-        }
+        if (combinedBuffer.length < MIN_BUFFER_BYTES) return;
+
+        // Don't transcribe if WS is already closed — nobody to respond to
+        if (ws.readyState !== ws.OPEN) return;
 
         try {
           const transcript = await SarvamService.transcribeAudioChunk(
@@ -223,7 +228,7 @@ class VobizSocketHandler {
 
           if (transcript && transcript.trim()) {
             if (!session.agent.allowInterruption && ws.isAgentSpeaking) {
-              console.log(`[Interruption Blocked] Customer spoke: "${transcript}" but agent is speaking.`);
+              console.log(`[Interruption Blocked] Customer spoke: "${transcript}"`);
               return;
             }
             if (ws.isAgentSpeaking) {
@@ -266,14 +271,18 @@ class VobizSocketHandler {
           }
 
           if (frame.event === 'media' && frame.media?.payload) {
-            // Accumulate chunk into buffer
             const audioBuffer = Buffer.from(frame.media.payload, 'base64');
             audioInputBuffer.push(audioBuffer);
             audioChunks.push(audioBuffer);
 
-            // Reset debounce timer — flush after 500ms of silence
+            // Trigger 1: reset silence debounce timer
             if (silenceTimer) clearTimeout(silenceTimer);
             silenceTimer = setTimeout(flushAudioBuffer, SILENCE_TIMEOUT_MS);
+
+            // Trigger 2: start max-duration timer on FIRST chunk of a new utterance
+            if (!maxDurationTimer) {
+              maxDurationTimer = setTimeout(flushAudioBuffer, MAX_BUFFER_DURATION_MS);
+            }
           }
         } catch (msgErr) {
           console.error('Error handling VoBiz stream frame:', msgErr);
@@ -283,8 +292,9 @@ class VobizSocketHandler {
       // 4. Handle Disconnects & Session Cleanup
       ws.on('close', async (code, reason) => {
         console.log(`VoBiz WebSocket connection closed for session ${session.id}. Code: ${code}`);
-        if (silenceTimer) clearTimeout(silenceTimer);
-        await flushAudioBuffer(); // flush any remaining audio before cleanup
+        // Cancel pending STT timers — WS is closed, responses can't be delivered
+        if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+        if (maxDurationTimer) { clearTimeout(maxDurationTimer); maxDurationTimer = null; }
         await this._cleanupSession(ws);
       });
 
