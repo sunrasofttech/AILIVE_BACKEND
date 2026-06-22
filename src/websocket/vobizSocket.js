@@ -97,10 +97,22 @@ class VobizSocketHandler {
               temperature: session.agent.temperature,
             });
 
-            // Stream audio chunk back to VoBiz WS
+            // Send audio back to VoBiz as JSON playAudio event
+            // Sarvam returns WAV (with 44-byte header) — strip header to get raw PCM
             if (ws.readyState === ws.OPEN) {
-              ws.send(audioBuffer);
-              audioChunks.push(audioBuffer);
+              const rawPcm = audioBuffer.length > 44
+                ? audioBuffer.slice(44)   // strip WAV header
+                : audioBuffer;
+              const playAudioEvent = JSON.stringify({
+                event: 'playAudio',
+                media: {
+                  contentType: 'audio/x-l16',
+                  sampleRate: 16000,
+                  payload: rawPcm.toString('base64'),
+                },
+              });
+              ws.send(playAudioEvent);
+              audioChunks.push(rawPcm);
             }
           } catch (ttsErr) {
             console.error('Failed to synthesize agent speech:', ttsErr);
@@ -133,16 +145,31 @@ class VobizSocketHandler {
       ws.transcriptChunks = transcriptChunks;
       ws.audioChunks = audioChunks;
 
-      // 3. Handle incoming customer audio stream (Binary frames)
+      // 3. Handle incoming customer audio stream
+      // VoBiz sends JSON frames with events: 'start', 'media', 'stop'
       ws.on('message', async (message, isBinary) => {
         try {
-          if (isBinary) {
-            audioChunks.push(message);
-            // Process audio bytes via Sarvam STT
-            // Note: In real-world low latency, you'd buffer or stream chunks. 
-            // Here we transcribe the received chunk.
+          // VoBiz always sends text JSON frames, not raw binary
+          const frame = JSON.parse(message.toString());
+
+          if (frame.event === 'start') {
+            console.log(`[VoBiz Stream] Call started. StreamId: ${frame.start?.streamId}`);
+            return;
+          }
+
+          if (frame.event === 'stop') {
+            console.log(`[VoBiz Stream] Call stopped by VoBiz.`);
+            return;
+          }
+
+          if (frame.event === 'media' && frame.media?.payload) {
+            // Decode base64 audio payload (raw mulaw or L16 PCM, no WAV header)
+            const audioBuffer = Buffer.from(frame.media.payload, 'base64');
+            audioChunks.push(audioBuffer);
+
+            // Transcribe via Sarvam STT
             const transcript = await SarvamService.transcribeAudioChunk(
-              message,
+              audioBuffer,
               session.agent.language
             );
 
@@ -150,19 +177,16 @@ class VobizSocketHandler {
               // Enforce interruption logic
               if (!session.agent.allowInterruption && ws.isAgentSpeaking) {
                 console.log(`[Interruption Blocked] Customer spoke: "${transcript}" but agent is speaking.`);
-                await CallLog.create({
-                  callSessionId: session.id,
-                  logLevel: 'info',
-                  message: `Customer spoke: "${transcript}" (interruption blocked because agent is speaking)`,
-                });
                 return;
               }
 
-              // Interruption allowed: if agent was speaking, reset state
+              // Interruption allowed: reset agent speaking state
               if (ws.isAgentSpeaking) {
                 ws.isAgentSpeaking = false;
-                if (ws.speakingTimeout) {
-                  clearTimeout(ws.speakingTimeout);
+                if (ws.speakingTimeout) clearTimeout(ws.speakingTimeout);
+                // Signal VoBiz to clear its audio playback buffer
+                if (ws.readyState === ws.OPEN) {
+                  ws.send(JSON.stringify({ event: 'clearAudio' }));
                 }
               }
 
@@ -175,16 +199,12 @@ class VobizSocketHandler {
                 message: `Customer spoke: ${transcript}`,
               });
 
-              // Feed text transcript to Gemini Live session
+              // Feed text transcript to Gemini
               geminiSession.sendUserTurn(transcript);
             }
-          } else {
-            // Handle control/text frames from VoBiz if any
-            const txtMsg = message.toString();
-            console.log(`Received non-binary text frame from VoBiz: ${txtMsg}`);
           }
         } catch (msgErr) {
-          console.error('Error handling customer stream frame:', msgErr);
+          console.error('Error handling VoBiz stream frame:', msgErr);
         }
       });
 
