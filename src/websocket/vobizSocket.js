@@ -90,29 +90,36 @@ class VobizSocketHandler {
             });
 
             // Synthesize Response text -> Voice Audio
-            const voiceName = session.agent.voice.voiceId;
-            const language = session.agent.language;
+            const voiceName = session.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
+            const language = session.agent.language || defaults.sarvam.defaultLanguageCode;
+            console.log(`[TTS] Synthesizing with voice=${voiceName}, lang=${language}`);
+
             const audioBuffer = await SarvamService.synthesizeText(text, voiceName, language, {
               pace: session.agent.pace,
               temperature: session.agent.temperature,
             });
 
+            console.log(`[TTS] Got audio buffer: ${audioBuffer.length} bytes`);
+
             // Send audio back to VoBiz as JSON playAudio event
-            // Sarvam returns WAV (with 44-byte header) — strip header to get raw PCM
-            if (ws.readyState === ws.OPEN) {
-              const rawPcm = audioBuffer.length > 44
-                ? audioBuffer.slice(44)   // strip WAV header
-                : audioBuffer;
+            // Sarvam returns WAV with header — read sample rate from header bytes 24-27, strip header for raw PCM
+            if (ws.readyState === ws.OPEN && audioBuffer.length > 44) {
+              const sampleRate = audioBuffer.readUInt32LE(24); // bytes 24-27 = sample rate in WAV spec
+              const rawPcm = audioBuffer.slice(44);
+              console.log(`[TTS] Sending ${rawPcm.length} bytes raw PCM at ${sampleRate}Hz to VoBiz`);
+
               const playAudioEvent = JSON.stringify({
                 event: 'playAudio',
                 media: {
                   contentType: 'audio/x-l16',
-                  sampleRate: 16000,
+                  sampleRate: sampleRate,
                   payload: rawPcm.toString('base64'),
                 },
               });
               ws.send(playAudioEvent);
               audioChunks.push(rawPcm);
+            } else if (audioBuffer.length <= 44) {
+              console.warn('[TTS] Audio buffer too small — TTS likely failed or returned mock audio');
             }
           } catch (ttsErr) {
             console.error('Failed to synthesize agent speech:', ttsErr);
