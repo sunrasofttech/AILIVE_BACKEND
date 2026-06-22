@@ -152,11 +152,60 @@ class VobizSocketHandler {
       ws.transcriptChunks = transcriptChunks;
       ws.audioChunks = audioChunks;
 
+      // Audio input buffer for debounced STT
+      // VoBiz sends many tiny 10ms chunks — we accumulate and only transcribe
+      // after 500ms of silence (end-of-utterance detection)
+      let audioInputBuffer = [];
+      let silenceTimer = null;
+      const SILENCE_TIMEOUT_MS = 500; // ms of silence before transcribing
+      const MIN_BUFFER_BYTES = 3200;  // ~100ms of audio at 16kHz L16 minimum
+
+      const flushAudioBuffer = async () => {
+        if (audioInputBuffer.length === 0) return;
+        const combinedBuffer = Buffer.concat(audioInputBuffer);
+        audioInputBuffer = [];
+
+        if (combinedBuffer.length < MIN_BUFFER_BYTES) {
+          console.log(`[STT] Buffer too small (${combinedBuffer.length} bytes), skipping.`);
+          return;
+        }
+
+        try {
+          const transcript = await SarvamService.transcribeAudioChunk(
+            combinedBuffer,
+            session.agent.language
+          );
+
+          if (transcript && transcript.trim()) {
+            if (!session.agent.allowInterruption && ws.isAgentSpeaking) {
+              console.log(`[Interruption Blocked] Customer spoke: "${transcript}" but agent is speaking.`);
+              return;
+            }
+            if (ws.isAgentSpeaking) {
+              ws.isAgentSpeaking = false;
+              if (ws.speakingTimeout) clearTimeout(ws.speakingTimeout);
+              if (ws.readyState === ws.OPEN) {
+                ws.send(JSON.stringify({ event: 'clearAudio' }));
+              }
+            }
+            console.log(`[Customer Speech]: ${transcript}`);
+            transcriptChunks.push({ role: 'customer', text: transcript });
+            await CallLog.create({
+              callSessionId: session.id,
+              logLevel: 'info',
+              message: `Customer spoke: ${transcript}`,
+            });
+            geminiSession.sendUserTurn(transcript);
+          }
+        } catch (sttErr) {
+          console.error('[STT] Transcription error:', sttErr.message);
+        }
+      };
+
       // 3. Handle incoming customer audio stream
       // VoBiz sends JSON frames with events: 'start', 'media', 'stop'
-      ws.on('message', async (message, isBinary) => {
+      ws.on('message', async (message) => {
         try {
-          // VoBiz always sends text JSON frames, not raw binary
           const frame = JSON.parse(message.toString());
 
           if (frame.event === 'start') {
@@ -166,49 +215,20 @@ class VobizSocketHandler {
 
           if (frame.event === 'stop') {
             console.log(`[VoBiz Stream] Call stopped by VoBiz.`);
+            if (silenceTimer) clearTimeout(silenceTimer);
+            await flushAudioBuffer();
             return;
           }
 
           if (frame.event === 'media' && frame.media?.payload) {
-            // Decode base64 audio payload (raw mulaw or L16 PCM, no WAV header)
+            // Accumulate chunk into buffer
             const audioBuffer = Buffer.from(frame.media.payload, 'base64');
+            audioInputBuffer.push(audioBuffer);
             audioChunks.push(audioBuffer);
 
-            // Transcribe via Sarvam STT
-            const transcript = await SarvamService.transcribeAudioChunk(
-              audioBuffer,
-              session.agent.language
-            );
-
-            if (transcript && transcript.trim()) {
-              // Enforce interruption logic
-              if (!session.agent.allowInterruption && ws.isAgentSpeaking) {
-                console.log(`[Interruption Blocked] Customer spoke: "${transcript}" but agent is speaking.`);
-                return;
-              }
-
-              // Interruption allowed: reset agent speaking state
-              if (ws.isAgentSpeaking) {
-                ws.isAgentSpeaking = false;
-                if (ws.speakingTimeout) clearTimeout(ws.speakingTimeout);
-                // Signal VoBiz to clear its audio playback buffer
-                if (ws.readyState === ws.OPEN) {
-                  ws.send(JSON.stringify({ event: 'clearAudio' }));
-                }
-              }
-
-              console.log(`[Customer Speech]: ${transcript}`);
-              transcriptChunks.push({ role: 'customer', text: transcript });
-
-              await CallLog.create({
-                callSessionId: session.id,
-                logLevel: 'info',
-                message: `Customer spoke: ${transcript}`,
-              });
-
-              // Feed text transcript to Gemini
-              geminiSession.sendUserTurn(transcript);
-            }
+            // Reset debounce timer — flush after 500ms of silence
+            if (silenceTimer) clearTimeout(silenceTimer);
+            silenceTimer = setTimeout(flushAudioBuffer, SILENCE_TIMEOUT_MS);
           }
         } catch (msgErr) {
           console.error('Error handling VoBiz stream frame:', msgErr);
@@ -218,6 +238,8 @@ class VobizSocketHandler {
       // 4. Handle Disconnects & Session Cleanup
       ws.on('close', async (code, reason) => {
         console.log(`VoBiz WebSocket connection closed for session ${session.id}. Code: ${code}`);
+        if (silenceTimer) clearTimeout(silenceTimer);
+        await flushAudioBuffer(); // flush any remaining audio before cleanup
         await this._cleanupSession(ws);
       });
 
