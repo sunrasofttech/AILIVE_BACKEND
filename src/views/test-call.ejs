@@ -138,8 +138,20 @@
           processor.onaudioprocess = (e) => {
             if (ws.readyState === WebSocket.OPEN) {
               const inputBuffer = e.inputBuffer.getChannelData(0);
-              const pcm16Buffer = downsampleBuffer(inputBuffer, audioContext.sampleRate);
-              ws.send(pcm16Buffer);
+              
+              // Compute RMS volume for basic Voice Activity Detection (VAD)
+              let sum = 0;
+              for (let i = 0; i < inputBuffer.length; i++) {
+                sum += inputBuffer[i] * inputBuffer[i];
+              }
+              const rms = Math.sqrt(sum / inputBuffer.length);
+              
+              // Only send audio if there is actual sound (rms > 0.01)
+              // This allows the server's 200ms silence-debounce timer to trigger naturally
+              if (rms > 0.01) {
+                const pcm16Buffer = downsampleBuffer(inputBuffer, audioContext.sampleRate);
+                ws.send(pcm16Buffer);
+              }
             }
           };
           
