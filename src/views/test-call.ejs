@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Tester - <%= agentId %></title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f9fafb; color: #111827; padding: 20px; max-width: 800px; margin: 0 auto; }
+    .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    h1 { margin-top: 0; font-size: 24px; }
+    button { background: #4f46e5; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+    button:hover { background: #4338ca; }
+    button:disabled { background: #d1d5db; cursor: not-allowed; }
+    button.danger { background: #ef4444; }
+    button.danger:hover { background: #dc2626; }
+    .controls { display: flex; gap: 10px; margin-top: 20px; }
+    .status { font-weight: 600; color: #6b7280; margin-top: 10px; }
+    .status.connected { color: #10b981; }
+    .status.disconnected { color: #ef4444; }
+    #transcript { background: #f3f4f6; padding: 16px; border-radius: 6px; height: 300px; overflow-y: auto; font-family: monospace; }
+    .msg { margin-bottom: 8px; }
+    .msg-agent { color: #4f46e5; }
+    .msg-customer { color: #059669; }
+    .msg-system { color: #6b7280; font-style: italic; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Agent Voice Tester</h1>
+    <p>Testing Agent ID: <code><%= agentId %></code></p>
+    <div id="status" class="status disconnected">Status: Disconnected</div>
+    <div class="controls">
+      <button id="btnStart">Start Call</button>
+      <button id="btnStop" class="danger" disabled>Stop Call</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Live Transcript</h3>
+    <div id="transcript"></div>
+  </div>
+
+  <script>
+    const wsUrl = "<%= wsUrl %>";
+    let ws = null;
+    let audioContext = null;
+    let microphone = null;
+    let processor = null;
+    let nextPlayTime = 0;
+
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const statusDiv = document.getElementById('status');
+    const transcriptDiv = document.getElementById('transcript');
+
+    function logMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = `msg msg-${role}`;
+      div.innerHTML = `<strong>${role === 'agent' ? 'Agent' : role === 'customer' ? 'You' : 'System'}:</strong> ${text}`;
+      transcriptDiv.appendChild(div);
+      transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+    }
+
+    // Downsample microphone Float32 buffer to Int16 PCM 16000Hz
+    function downsampleBuffer(buffer, sampleRate) {
+      if (sampleRate === 16000) {
+        return convertFloat32ToInt16(buffer);
+      }
+      const sampleRateRatio = sampleRate / 16000;
+      const newLength = Math.round(buffer.length / sampleRateRatio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+        let accum = 0, count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+          accum += buffer[i];
+          count++;
+        }
+        result[offsetResult] = accum / count;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      return convertFloat32ToInt16(result);
+    }
+
+    function convertFloat32ToInt16(buffer) {
+      let l = buffer.length;
+      let buf = new Int16Array(l);
+      while (l--) {
+        buf[l] = Math.min(1, buffer[l]) * 0x7FFF;
+      }
+      return buf.buffer;
+    }
+
+    // Playback incoming Int16 PCM 16000Hz audio
+    function playAudioData(int16Array) {
+      if (!audioContext) return;
+      const float32Array = new Float32Array(int16Array.length);
+      for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i] / 0x7FFF;
+      }
+      
+      const audioBuffer = audioContext.createBuffer(1, float32Array.length, 16000);
+      audioBuffer.getChannelData(0).set(float32Array);
+      
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContext.destination);
+      
+      const currentTime = audioContext.currentTime;
+      if (nextPlayTime < currentTime) nextPlayTime = currentTime;
+      source.start(nextPlayTime);
+      nextPlayTime += audioBuffer.duration;
+    }
+
+    async function startCall() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = "arraybuffer";
+        
+        ws.onopen = () => {
+          statusDiv.textContent = 'Status: Connected';
+          statusDiv.className = 'status connected';
+          btnStart.disabled = true;
+          btnStop.disabled = false;
+          logMessage('system', 'Call connected. Connecting to Agent AI...');
+          
+          microphone = audioContext.createMediaStreamSource(stream);
+          processor = audioContext.createScriptProcessor(4096, 1, 1);
+          
+          processor.onaudioprocess = (e) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              const inputBuffer = e.inputBuffer.getChannelData(0);
+              const pcm16Buffer = downsampleBuffer(inputBuffer, audioContext.sampleRate);
+              ws.send(pcm16Buffer);
+            }
+          };
+          
+          microphone.connect(processor);
+          processor.connect(audioContext.destination);
+        };
+        
+        ws.onmessage = (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            // Incoming Audio
+            const int16Array = new Int16Array(event.data);
+            playAudioData(int16Array);
+          } else {
+            // Incoming Text/JSON
+            if (event.data === 'CLEAR') {
+              nextPlayTime = audioContext.currentTime;
+            } else {
+              try {
+                const msg = JSON.parse(event.data);
+                logMessage(msg.type, msg.text);
+              } catch (e) {}
+            }
+          }
+        };
+        
+        ws.onclose = () => {
+          stopCall();
+          logMessage('system', 'Call disconnected.');
+        };
+
+      } catch (err) {
+        alert('Could not access microphone: ' + err.message);
+      }
+    }
+
+    function stopCall() {
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('stop');
+          ws.close();
+        }
+        ws = null;
+      }
+      if (processor) {
+        processor.disconnect();
+        processor = null;
+      }
+      if (microphone) {
+        microphone.disconnect();
+        microphone = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+      
+      statusDiv.textContent = 'Status: Disconnected';
+      statusDiv.className = 'status disconnected';
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+    }
+
+    btnStart.addEventListener('click', startCall);
+    btnStop.addEventListener('click', stopCall);
+  </script>
+</body>
+</html>

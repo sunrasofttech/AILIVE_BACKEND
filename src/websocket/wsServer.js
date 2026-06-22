@@ -1,6 +1,7 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
 const vobizSocketHandler = require('./vobizSocket');
+const webSocketHandler = require('./webSocket');
 const defaults = require('../config/defaults');
 
 const port = defaults.ws.port;
@@ -18,6 +19,12 @@ function startWebSocketServer(server = null) {
 
       if (pathname === '/ws/vobiz') {
         wss.handleUpgrade(request, socket, head, (ws) => {
+          ws.isWebcall = false;
+          wss.emit('connection', ws, request);
+        });
+      } else if (pathname === '/ws/webcall') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          ws.isWebcall = true;
           wss.emit('connection', ws, request);
         });
       } else {
@@ -52,7 +59,12 @@ function setupWss(wss) {
     ws.on('pong', () => {
       ws.isAlive = true;
     });
-    vobizSocketHandler.handleConnection(ws, req);
+
+    if (ws.isWebcall) {
+      webSocketHandler.handleConnection(ws, req);
+    } else {
+      vobizSocketHandler.handleConnection(ws, req);
+    }
   });
 
   const interval = setInterval(() => {

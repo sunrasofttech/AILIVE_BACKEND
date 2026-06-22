@@ -1,48 +1,7 @@
 const url = require('url');
 const { CallSession, Agent, Voice, CallLog, Campaign } = require('../models');
-const { GeminiLiveSession } = require('../services/geminiLiveService');
-const SarvamService = require('../services/sarvamService');
 const QueueService = require('../services/queueService');
-const { redisClient } = require('../config/redis');
-const defaults = require('../config/defaults');
-
-/**
- * Downsample 16-bit mono PCM from inputRate to outputRate using linear interpolation.
- * VoBiz telephony only supports 8000/16000/24000Hz but Sarvam TTS outputs at 22050Hz.
- */
-function resamplePCM(inputBuffer, inputRate, outputRate) {
-  if (inputRate === outputRate) return inputBuffer;
-  const inputSamples = Math.floor(inputBuffer.length / 2);
-  const outputSamples = Math.floor(inputSamples * outputRate / inputRate);
-  const outputBuffer = Buffer.alloc(outputSamples * 2);
-  for (let i = 0; i < outputSamples; i++) {
-    const srcPos = i * inputRate / outputRate;
-    const srcFloor = Math.floor(srcPos);
-    const srcCeil = Math.min(srcFloor + 1, inputSamples - 1);
-    const frac = srcPos - srcFloor;
-    const s1 = inputBuffer.readInt16LE(srcFloor * 2);
-    const s2 = inputBuffer.readInt16LE(srcCeil * 2);
-    const sample = Math.round(s1 + frac * (s2 - s1));
-    outputBuffer.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * 2);
-  }
-  return outputBuffer;
-}
-
-/**
- * Strip markdown formatting from Gemini text before TTS synthesis.
- */
-function stripMarkdown(text) {
-  return text
-    .replace(/\*\*(.*?)\*\*/g, '$1')  // bold
-    .replace(/\*(.*?)\*/g, '$1')       // italic
-    .replace(/`([^`]*)`/g, '$1')       // inline code
-    .replace(/#{1,6}\s/g, '')          // headings
-    .replace(/^\s*[-*+]\s+/gm, '')    // bullet points
-    .replace(/^\s*\d+\.\s+/gm, '')   // numbered lists
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
-    .replace(/\n{3,}/g, '\n\n')       // excess newlines
-    .trim();
-}
+const VoicePipeline = require('../services/voicePipeline');
 
 class VobizSocketHandler {
   /**
@@ -97,160 +56,48 @@ class VobizSocketHandler {
         message: 'VoBiz WebSocket connected and call established',
       });
 
-      // Keep running transcript memory in memory
+      // Keep transcript and audio for CallLog/QueueService when call ends
       const transcriptChunks = [];
       const audioChunks = [];
 
-      // 2. Instantiate Gemini Live Session
-      const geminiSession = new GeminiLiveSession({
-        systemPrompt: session.agent.systemPrompt,
-        model: defaults.gemini.liveModel,
-        onResponseText: async (text) => {
-          try {
-            console.log(`[Gemini Response]: ${text}`);
-            transcriptChunks.push({ role: 'agent', text });
-
-            // Track agent speaking state
-            ws.isAgentSpeaking = true;
-            const wordCount = text.split(/\s+/).filter(Boolean).length;
-            const durationMs = Math.max(1500, wordCount * 450); // ~450ms per word, min 1.5s
-            if (ws.speakingTimeout) {
-              clearTimeout(ws.speakingTimeout);
-            }
-            ws.speakingTimeout = setTimeout(() => {
-              ws.isAgentSpeaking = false;
-            }, durationMs);
-
-            await CallLog.create({
-              callSessionId: session.id,
-              logLevel: 'info',
-              message: `Agent responded: ${text}`,
+      // 2. Instantiate generic Voice Pipeline
+      const pipeline = new VoicePipeline({
+        agent: session.agent,
+        onAudioOutput: (pcmBuffer, targetRate) => {
+          if (ws.readyState === ws.OPEN) {
+            const playAudioEvent = JSON.stringify({
+              event: 'playAudio',
+              media: {
+                contentType: 'audio/x-l16',
+                sampleRate: targetRate,
+                payload: pcmBuffer.toString('base64'),
+              },
             });
-
-            // Strip markdown before TTS (Gemini sometimes returns bold/bullets)
-            const cleanText = stripMarkdown(text);
-            if (!cleanText) {
-              console.warn('[TTS] Skipping empty/markdown-only response');
-              return;
-            }
-
-            // Synthesize Response text -> Voice Audio
-            const voiceName = session.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
-            const language = session.agent.language || defaults.sarvam.defaultLanguageCode;
-            console.log(`[TTS] Synthesizing: "${cleanText.substring(0, 60)}..." voice=${voiceName}`);
-
-            const audioBuffer = await SarvamService.synthesizeText(cleanText, voiceName, language, {
-              pace: session.agent.pace,
-              temperature: session.agent.temperature,
-            });
-
-            // Send audio back to VoBiz as JSON playAudio event
-            // Sarvam outputs WAV at 22050Hz — resample to 8000Hz for telephony
-            if (ws.readyState === ws.OPEN && audioBuffer.length > 44) {
-              const srcRate = audioBuffer.readUInt32LE(24); // sample rate from WAV header
-              const rawPcm = audioBuffer.slice(44);         // strip WAV header
-              const TARGET_RATE = 16000;                    // Match incoming L16 16kHz for best quality
-              const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
-              console.log(`[TTS] ${rawPcm.length}B @${srcRate}Hz → ${resampledPcm.length}B @${TARGET_RATE}Hz`);
-
-              const playAudioEvent = JSON.stringify({
-                event: 'playAudio',
-                media: {
-                  contentType: 'audio/x-l16',
-                  sampleRate: TARGET_RATE,
-                  payload: resampledPcm.toString('base64'),
-                },
-              });
-              ws.send(playAudioEvent);
-              audioChunks.push(resampledPcm);
-            } else if (audioBuffer.length <= 44) {
-              console.warn('[TTS] Audio buffer too small — TTS likely failed');
-            }
-          } catch (ttsErr) {
-            console.error('Failed to synthesize agent speech:', ttsErr);
-            await CallLog.create({
-              callSessionId: session.id,
-              logLevel: 'error',
-              message: `TTS synthesis failure: ${ttsErr.message}`,
-            });
+            ws.send(playAudioEvent);
+            audioChunks.push(pcmBuffer);
           }
         },
-        onError: async (err) => {
-          console.error(`Gemini session error for call ${session.id}:`, err);
+        onClearAudio: () => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ event: 'clearAudio' }));
+          }
+        },
+        onAgentTranscription: (text) => transcriptChunks.push({ role: 'agent', text }),
+        onCustomerTranscription: (text) => transcriptChunks.push({ role: 'customer', text }),
+        onLog: async (level, message) => {
           await CallLog.create({
             callSessionId: session.id,
-            logLevel: 'error',
-            message: `Gemini Live connection error: ${err.message}`,
+            logLevel: level,
+            message: message,
           });
-        },
-        onClose: () => {
-          console.log(`Gemini session closed for call ${session.id}`);
         },
       });
 
-      // Connect to Google Gemini
-      geminiSession.connect();
-
       // Store references on the WebSocket object for cleanup
       ws.session = session;
-      ws.geminiSession = geminiSession;
+      ws.pipeline = pipeline;
       ws.transcriptChunks = transcriptChunks;
       ws.audioChunks = audioChunks;
-
-      // Audio input buffer — dual flush triggers:
-      //  1. Silence debounce: flush after 200ms of no new audio frames
-      //  2. Max duration:     flush after 2s of continuous speech (don't wait for pause)
-      let audioInputBuffer = [];
-      let silenceTimer = null;
-      let maxDurationTimer = null;
-      const SILENCE_TIMEOUT_MS = 200;   // flush after 200ms pause
-      const MAX_BUFFER_DURATION_MS = 2000; // flush every 2s of continuous speech
-      const MIN_BUFFER_BYTES = 1600;    // ~50ms at 16kHz L16 minimum
-
-      const flushAudioBuffer = async () => {
-        if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
-        if (maxDurationTimer) { clearTimeout(maxDurationTimer); maxDurationTimer = null; }
-
-        if (audioInputBuffer.length === 0) return;
-        const combinedBuffer = Buffer.concat(audioInputBuffer);
-        audioInputBuffer = []; // reset immediately so new chunks accumulate cleanly
-
-        if (combinedBuffer.length < MIN_BUFFER_BYTES) return;
-
-        // Don't transcribe if WS is already closed — nobody to respond to
-        if (ws.readyState !== ws.OPEN) return;
-
-        try {
-          const transcript = await SarvamService.transcribeAudioChunk(
-            combinedBuffer,
-            session.agent.language
-          );
-
-          if (transcript && transcript.trim()) {
-            if (!session.agent.allowInterruption && ws.isAgentSpeaking) {
-              console.log(`[Interruption Blocked] Customer spoke: "${transcript}"`);
-              return;
-            }
-            if (ws.isAgentSpeaking) {
-              ws.isAgentSpeaking = false;
-              if (ws.speakingTimeout) clearTimeout(ws.speakingTimeout);
-              if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify({ event: 'clearAudio' }));
-              }
-            }
-            console.log(`[Customer Speech]: ${transcript}`);
-            transcriptChunks.push({ role: 'customer', text: transcript });
-            await CallLog.create({
-              callSessionId: session.id,
-              logLevel: 'info',
-              message: `Customer spoke: ${transcript}`,
-            });
-            geminiSession.sendUserTurn(transcript);
-          }
-        } catch (sttErr) {
-          console.error('[STT] Transcription error:', sttErr.message);
-        }
-      };
 
       // 3. Handle incoming customer audio stream
       // VoBiz sends JSON frames with events: 'start', 'media', 'stop'
@@ -272,17 +119,8 @@ class VobizSocketHandler {
 
           if (frame.event === 'media' && frame.media?.payload) {
             const audioBuffer = Buffer.from(frame.media.payload, 'base64');
-            audioInputBuffer.push(audioBuffer);
             audioChunks.push(audioBuffer);
-
-            // Trigger 1: reset silence debounce timer
-            if (silenceTimer) clearTimeout(silenceTimer);
-            silenceTimer = setTimeout(flushAudioBuffer, SILENCE_TIMEOUT_MS);
-
-            // Trigger 2: start max-duration timer on FIRST chunk of a new utterance
-            if (!maxDurationTimer) {
-              maxDurationTimer = setTimeout(flushAudioBuffer, MAX_BUFFER_DURATION_MS);
-            }
+            pipeline.handleAudioInput(audioBuffer);
           }
         } catch (msgErr) {
           console.error('Error handling VoBiz stream frame:', msgErr);
@@ -292,9 +130,6 @@ class VobizSocketHandler {
       // 4. Handle Disconnects & Session Cleanup
       ws.on('close', async (code, reason) => {
         console.log(`VoBiz WebSocket connection closed for session ${session.id}. Code: ${code}`);
-        // Cancel pending STT timers — WS is closed, responses can't be delivered
-        if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
-        if (maxDurationTimer) { clearTimeout(maxDurationTimer); maxDurationTimer = null; }
         await this._cleanupSession(ws);
       });
 
@@ -313,22 +148,13 @@ class VobizSocketHandler {
     }
   }
 
-  /**
-   * Finalize call records, save logs, decrement concurrency counters, and wake up AI worker
-   */
   async _cleanupSession(ws) {
-    const { session, geminiSession, transcriptChunks } = ws;
+    const { session, pipeline, transcriptChunks } = ws;
     if (!session) return;
 
     try {
-      // Clear speaking timeout
-      if (ws.speakingTimeout) {
-        clearTimeout(ws.speakingTimeout);
-      }
-
-      // Disconnect Gemini
-      if (geminiSession) {
-        geminiSession.close();
+      if (pipeline) {
+        await pipeline.close();
       }
 
       const freshSession = await CallSession.findByPk(session.id);

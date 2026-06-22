@@ -24,6 +24,10 @@ const path = require('path');
 
 const app = express();
 
+// View Engine Setup for Web Tester
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+
 // Enable trust proxy to correctly identify user IPs behind reverse proxies (for express-rate-limit)
 app.set('trust proxy', process.env.TRUST_PROXY ? (isNaN(process.env.TRUST_PROXY) ? process.env.TRUST_PROXY : parseInt(process.env.TRUST_PROXY, 10)) : 1);
 
@@ -138,6 +142,16 @@ app.use('/api/v1/campaigns', campaignRoutes);
 app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/voices', voiceRoutes);
+
+// Web Tester UI Route
+app.get('/test-call', (req, res) => {
+  const agentId = req.query.agentId;
+  if (!agentId) {
+    return res.status(400).send('Missing agentId query parameter.');
+  }
+  const wsUrl = `ws://${req.headers.host}/ws/webcall?agentId=${agentId}`;
+  res.render('test-call', { agentId, wsUrl });
+});
 
 // 5. Global 404 Route
 app.use((req, res, next) => {
