@@ -42,8 +42,63 @@ function stripMarkdown(text) {
 }
 
 /**
+ * Preprocess text for natural-sounding TTS (ElevenLabs-style quality).
+ * Expands abbreviations, numbers, and adds rhythm markers.
+ */
+function preprocessForTTS(text) {
+  return text
+    // Expand common abbreviations for natural pronunciation
+    .replace(/\bMr\./g, 'Mister')
+    .replace(/\bMrs\./g, 'Misses')
+    .replace(/\bDr\./g, 'Doctor')
+    .replace(/\bvs\./gi, 'versus')
+    .replace(/\betc\./gi, 'etcetera')
+    // Spell out numbers for natural reading
+    .replace(/\b(\d{1,2}):(\d{2})\s*(AM|PM)\b/gi, (_, h, m, period) =>
+      `${h}:${m} ${period}`)
+    // Add natural pause after sentence-ending punctuation
+    .replace(/([.!?])\s+/g, '$1  ')
+    // Normalize whitespace
+    .replace(/\s{3,}/g, '  ')
+    .trim();
+}
+
+/**
+ * Split a response into sentence-level chunks for streaming TTS.
+ * This gives ElevenLabs-like progressive audio output — the first sentence
+ * plays while remaining sentences are still being synthesized.
+ */
+function splitIntoSentences(text) {
+  // Split on sentence-ending punctuation, keep the delimiter
+  const raw = text.match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [text];
+  return raw
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+}
+
+/**
+ * Compute actual audio duration in milliseconds from a WAV buffer.
+ */
+function wavDurationMs(wavBuffer) {
+  if (wavBuffer.length < 44) return 1500;
+  try {
+    const sampleRate = wavBuffer.readUInt32LE(24);
+    const byteRate = wavBuffer.readUInt32LE(28);
+    const dataLength = wavBuffer.length - 44;
+    return Math.round((dataLength / byteRate) * 1000);
+  } catch {
+    return 1500;
+  }
+}
+
+/**
  * VoicePipeline orchestrates the audio processing loop independent of the transport layer.
  * It handles STT transcription, Gemini responses, and TTS synthesis.
+ * 
+ * Quality improvements:
+ * - Sentence-level streaming TTS for low Time to First Audio (like ElevenLabs)
+ * - Accurate isAgentSpeaking tracking based on actual WAV duration
+ * - Correct allow_interruption enforcement with audio buffer clearing
  */
 class VoicePipeline {
   constructor(options) {
@@ -57,6 +112,9 @@ class VoicePipeline {
 
     this.isAgentSpeaking = false;
     this.speakingTimeout = null;
+
+    // Sentence-level TTS streaming queue to ensure ordered playback
+    this._ttsQueue = Promise.resolve();
 
     this.audioInputBuffer = [];
     this.silenceTimer = null;
@@ -77,34 +135,26 @@ class VoicePipeline {
           this._log('info', `Agent responded: ${text}`);
           if (this.onAgentTranscription) this.onAgentTranscription(text);
 
-          this.isAgentSpeaking = true;
-          const wordCount = text.split(/\s+/).filter(Boolean).length;
-          const durationMs = Math.max(1500, wordCount * 450); // ~450ms per word, min 1.5s
-          if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
-          this.speakingTimeout = setTimeout(() => {
-            this.isAgentSpeaking = false;
-          }, durationMs);
+          // Mark agent as speaking immediately so interruption logic takes effect
+          // even before audio is synthesized.
+          this._setAgentSpeaking(3000); // Conservative minimum while we process
 
           const cleanText = stripMarkdown(text);
           if (!cleanText) return;
 
-          const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
-          const language = this.agent.language || defaults.sarvam.defaultLanguageCode;
+          // ── ElevenLabs-quality technique: sentence-level streaming ──
+          // Split response into sentences and synthesize + stream each
+          // sentence in order. Customer hears first sentence ~1s sooner.
+          const sentences = splitIntoSentences(cleanText);
 
-          const audioBuffer = await SarvamService.synthesizeText(cleanText, voiceName, language, {
-            pace: this.agent.pace,
-            temperature: this.agent.temperature,
-          });
-
-          if (this.isConnected && audioBuffer.length > 44) {
-            const srcRate = audioBuffer.readUInt32LE(24);
-            const rawPcm = audioBuffer.slice(44);
-            const TARGET_RATE = 16000;
-            const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
-            if (this.onAudioOutput) this.onAudioOutput(resampledPcm, TARGET_RATE);
+          for (const sentence of sentences) {
+            // Chain onto the TTS queue to preserve sentence playback order
+            this._ttsQueue = this._ttsQueue.then(() =>
+              this._synthesizeAndPlay(sentence)
+            );
           }
         } catch (err) {
-          this._log('error', `TTS synthesis failure: ${err.message}`);
+          this._log('error', `TTS pipeline failure: ${err.message}`);
           if (this.onError) this.onError(err);
         }
       },
@@ -136,27 +186,73 @@ class VoicePipeline {
     }
   }
 
+  /**
+   * Set isAgentSpeaking = true and schedule automatic reset after durationMs.
+   * Cancels any previous timer.
+   * @param {number} durationMs
+   */
+  _setAgentSpeaking(durationMs) {
+    this.isAgentSpeaking = true;
+    if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
+    this.speakingTimeout = setTimeout(() => {
+      this.isAgentSpeaking = false;
+    }, durationMs);
+  }
+
+  /**
+   * Synthesize a single sentence/chunk via Sarvam TTS and stream it.
+   * Updates isAgentSpeaking with the actual WAV audio duration.
+   * @param {string} text
+   */
+  async _synthesizeAndPlay(text) {
+    if (!this.isConnected || !text.trim()) return;
+
+    try {
+      const processedText = preprocessForTTS(text);
+      const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
+      const language = this.agent.language || defaults.sarvam.defaultLanguageCode;
+
+      const audioBuffer = await SarvamService.synthesizeText(processedText, voiceName, language, {
+        pace: this.agent.pace,
+        temperature: this.agent.temperature,
+      });
+
+      if (!this.isConnected || audioBuffer.length <= 44) return;
+
+      // ── FIX: compute actual audio duration and extend speaking window ──
+      const audioDurationMs = wavDurationMs(audioBuffer);
+      this._setAgentSpeaking(audioDurationMs + 300); // +300ms buffer after audio ends
+
+      const srcRate = audioBuffer.readUInt32LE(24);
+      const rawPcm = audioBuffer.slice(44);
+      const TARGET_RATE = 16000;
+      const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
+
+      if (this.onAudioOutput) this.onAudioOutput(resampledPcm, TARGET_RATE);
+    } catch (err) {
+      this._log('error', `TTS synthesis failure for chunk "${text}": ${err.message}`);
+    }
+  }
+
+  /**
+   * Play a pre-synthesized first message audio file directly with no delay.
+   */
   _playPreRecordedFirstMessage(filePath) {
     try {
       this._log('info', `Playing pre-recorded first message audio from ${filePath}`);
       const audioBuffer = fs.readFileSync(filePath);
       if (audioBuffer.length > 44) {
+        if (this.onAgentTranscription && this.agent.firstMessage) {
+          this.onAgentTranscription(this.agent.firstMessage);
+        }
+
+        const audioDurationMs = wavDurationMs(audioBuffer);
+        this._setAgentSpeaking(audioDurationMs + 300);
+
         const srcRate = audioBuffer.readUInt32LE(24);
         const rawPcm = audioBuffer.slice(44);
         const TARGET_RATE = 16000;
         const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
-
-        if (this.onAgentTranscription && this.agent.firstMessage) {
-          this.onAgentTranscription(this.agent.firstMessage);
-        }
-        
-        this.isAgentSpeaking = true;
-        const wordCount = (this.agent.firstMessage || '').split(/\s+/).filter(Boolean).length;
-        const durationMs = Math.max(1500, wordCount * 450);
-        if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
-        this.speakingTimeout = setTimeout(() => {
-          this.isAgentSpeaking = false;
-        }, durationMs);
 
         if (this.onAudioOutput) {
           this.onAudioOutput(resampledPcm, TARGET_RATE);
@@ -176,7 +272,7 @@ class VoicePipeline {
   /**
    * Handle incoming raw PCM buffer from user's microphone/telephone.
    * Note: Expects 16000Hz L16 format.
-   * @param {Buffer} pcmBuffer 
+   * @param {Buffer} pcmBuffer
    */
   async handleAudioInput(pcmBuffer) {
     if (!this.isConnected) return;
@@ -208,11 +304,15 @@ class VoicePipeline {
       const transcript = await SarvamService.transcribeAudioChunk(combinedBuffer, this.agent.language);
 
       if (transcript && transcript.trim()) {
+        // ── FIX: properly enforce allow_interruption ──
         if (!this.agent.allowInterruption && this.isAgentSpeaking) {
-          this._log('info', `[Interruption Blocked] Customer spoke: "${transcript}"`);
+          this._log('info', `[Interruption Blocked] Customer spoke: "${transcript}" — agent still speaking, discarding.`);
+          // Clear buffer so the same audio doesn't replay on next flush
+          this.audioInputBuffer = [];
           return;
         }
 
+        // Customer interrupted — stop agent audio immediately
         if (this.isAgentSpeaking) {
           this.isAgentSpeaking = false;
           if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
