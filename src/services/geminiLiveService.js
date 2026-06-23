@@ -32,25 +32,41 @@ class GeminiLiveSession {
 
   /**
    * Initialize the session (replaces WebSocket connect)
-   * Sends an initial greeting turn to kick off the conversation
+   * Sends an initial greeting turn to kick off the conversation or skips it if pre-recorded
    */
-  connect() {
+  connect(skipGreeting = false, firstMessage = null) {
     if (!this.apiKey || this.apiKey === 'your_google_gemini_api_key') {
       console.warn('Google Gemini API Key is missing. Simulating Mock Gemini responses.');
       this.isConnected = true;
-      setTimeout(() => {
-        if (this.onResponseText) {
-          this.onResponseText('Hello, I am your virtual agent. How can I help you today?');
-        }
-      }, 1000);
+      if (!skipGreeting) {
+        setTimeout(() => {
+          if (this.onResponseText) {
+            this.onResponseText('Hello, I am your virtual agent. How can I help you today?');
+          }
+        }, 1000);
+      } else if (firstMessage) {
+        this.conversationHistory.push({
+          role: 'model',
+          parts: [{ text: firstMessage }],
+        });
+      }
       return;
     }
 
     this.isConnected = true;
     console.log(`Gemini REST session initialized with model: ${this.modelName}`);
 
-    // Send an initial greeting request to start the conversation
-    this._sendToGemini('[Call connected. Greet the customer according to your instructions.]');
+    if (skipGreeting) {
+      if (firstMessage) {
+        this.conversationHistory.push({
+          role: 'model',
+          parts: [{ text: firstMessage }],
+        });
+      }
+    } else {
+      // Send an initial greeting request to start the conversation
+      this._sendToGemini('[Call connected. Greet the customer according to your instructions.]');
+    }
   }
 
   /**

@@ -11,6 +11,7 @@ const createAgentSchema = Joi.object({
   allowInterruption: Joi.boolean().default(true),
   pace: Joi.number().min(0.5).max(2.0).default(1.00),
   temperature: Joi.number().min(0.01).max(2.0).default(0.60),
+  firstMessage: Joi.string().max(1000).optional().allow(null, ''),
 });
 
 const updateAgentSchema = Joi.object({
@@ -24,6 +25,7 @@ const updateAgentSchema = Joi.object({
   allowInterruption: Joi.boolean().optional(),
   pace: Joi.number().min(0.5).max(2.0).optional(),
   temperature: Joi.number().min(0.01).max(2.0).optional(),
+  firstMessage: Joi.string().max(1000).optional().allow(null, ''),
 });
 
 module.exports = {

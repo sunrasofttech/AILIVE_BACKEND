@@ -28,6 +28,16 @@ Agent.init(
       allowNull: false,
       field: 'system_prompt',
     },
+    firstMessage: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'first_message',
+    },
+    firstMessageAudioPath: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'first_message_audio_path',
+    },
     language: {
       type: DataTypes.STRING(10),
       defaultValue: 'en',

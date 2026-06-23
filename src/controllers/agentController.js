@@ -2,6 +2,44 @@ const { Agent, Voice, Category, User } = require('../models');
 const ResponseBuilder = require('../utils/response');
 const { createAgentSchema, updateAgentSchema } = require('../validators/agent');
 const { Op } = require('sequelize');
+const SarvamService = require('../services/sarvamService');
+const fs = require('fs');
+const path = require('path');
+
+async function handleFirstMessageAudio(agent, firstMessage) {
+  if (!firstMessage) {
+    if (agent.firstMessageAudioPath) {
+      const oldPath = path.resolve(agent.firstMessageAudioPath);
+      if (fs.existsSync(oldPath)) {
+        try { fs.unlinkSync(oldPath); } catch (e) {}
+      }
+    }
+    return null;
+  }
+
+  let voice = agent.voice;
+  if (!voice && agent.voiceId) {
+    voice = await Voice.findByPk(agent.voiceId);
+  }
+
+  const voiceName = voice ? voice.voiceId : 'shubh';
+  const language = agent.language || 'en';
+
+  const audioBuffer = await SarvamService.synthesizeText(firstMessage, voiceName, language, {
+    pace: agent.pace,
+    temperature: agent.temperature,
+  });
+
+  const filename = `${agent.id}.wav`;
+  const uploadsDir = path.join(process.cwd(), 'uploads', 'previews', 'first-message');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  const filePath = path.join(uploadsDir, filename);
+  fs.writeFileSync(filePath, audioBuffer);
+
+  return `uploads/previews/first-message/${filename}`;
+}
 
 class AgentController {
   /**
@@ -80,7 +118,7 @@ class AgentController {
         return ResponseBuilder.error(res, error.details[0].message, 400);
       }
 
-      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus, allowInterruption, pace, temperature } = value;
+      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus, allowInterruption, pace, temperature, firstMessage } = value;
 
       // Validate voice exists
       const voice = await Voice.findByPk(voiceId);
@@ -109,7 +147,13 @@ class AgentController {
         allowInterruption,
         pace,
         temperature,
+        firstMessage,
       });
+
+      if (firstMessage) {
+        const audioPath = await handleFirstMessageAudio(agent, firstMessage);
+        await agent.update({ firstMessageAudioPath: audioPath });
+      }
 
       return ResponseBuilder.success(res, agent, 'Voice Agent created successfully', 201);
     } catch (err) {
@@ -137,7 +181,7 @@ class AgentController {
         return ResponseBuilder.error(res, 'Forbidden: You cannot modify default preloaded agents', 403);
       }
 
-      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus, allowInterruption, pace, temperature } = value;
+      const { name, description, systemPrompt, language, voiceId, categoryId, activeStatus, allowInterruption, pace, temperature, firstMessage } = value;
 
       if (voiceId) {
         const voice = await Voice.findByPk(voiceId);
@@ -164,7 +208,18 @@ class AgentController {
         allowInterruption: allowInterruption !== undefined ? allowInterruption : agent.allowInterruption,
         pace: pace !== undefined ? pace : agent.pace,
         temperature: temperature !== undefined ? temperature : agent.temperature,
+        firstMessage: firstMessage !== undefined ? firstMessage : agent.firstMessage,
       });
+
+      const isVoiceOrSettingsChanged = (voiceId && voiceId !== agent.voiceId) ||
+                                       (language && language !== agent.language) ||
+                                       (pace !== undefined && parseFloat(pace) !== parseFloat(agent.pace)) ||
+                                       (temperature !== undefined && parseFloat(temperature) !== parseFloat(agent.temperature));
+
+      if (firstMessage !== undefined || (agent.firstMessage && isVoiceOrSettingsChanged)) {
+        const audioPath = await handleFirstMessageAudio(agent, agent.firstMessage);
+        await agent.update({ firstMessageAudioPath: audioPath });
+      }
 
       return ResponseBuilder.success(res, agent, 'Agent details updated successfully');
     } catch (err) {

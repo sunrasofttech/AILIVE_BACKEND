@@ -160,6 +160,8 @@ CREATE TABLE IF NOT EXISTS `agents` (
   `name` VARCHAR(100) NOT NULL,
   `description` TEXT NULL,
   `system_prompt` TEXT NOT NULL,
+  `first_message` TEXT NULL,
+  `first_message_audio_path` VARCHAR(255) NULL,
   `language` VARCHAR(10) DEFAULT 'en',
   `voice_id` VARCHAR(36) NOT NULL,
   `category_id` VARCHAR(36) NULL,
@@ -438,3 +440,7 @@ INSERT INTO `users` (`id`, `email`, `mobile`, `password_hash`, `business_name`, 
 -- Seed Merchant Subscription
 INSERT INTO `subscriptions` (`id`, `user_id`, `plan_id`, `active_plan`, `start_date`, `expiry_date`, `calls_used`, `calls_remaining`, `status`) VALUES
 ('s0000000-0000-0000-0000-000000000001', 'u0000000-0000-0000-0000-000000000001', 'p0000000-0000-0000-0000-000000000001', 'Starter', NOW(), DATE_ADD(NOW(), INTERVAL 1 YEAR), 0, 5, 'active');
+
+-- Add new columns for pre-generated first message audio
+ALTER TABLE `agents` ADD COLUMN IF NOT EXISTS `first_message` TEXT NULL;
+ALTER TABLE `agents` ADD COLUMN IF NOT EXISTS `first_message_audio_path` VARCHAR(255) NULL;

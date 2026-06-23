@@ -1,6 +1,8 @@
 const { GeminiLiveSession } = require('./geminiLiveService');
 const SarvamService = require('./sarvamService');
 const defaults = require('../config/defaults');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * Downsample 16-bit mono PCM from inputRate to outputRate using linear interpolation.
@@ -115,7 +117,54 @@ class VoicePipeline {
       },
     });
 
-    this.geminiSession.connect();
+    let hasPreRecordedFirstMessage = false;
+    let preRecordedFilePath = null;
+
+    if (this.agent.firstMessageAudioPath) {
+      preRecordedFilePath = path.resolve(process.cwd(), this.agent.firstMessageAudioPath);
+      if (fs.existsSync(preRecordedFilePath)) {
+        hasPreRecordedFirstMessage = true;
+      }
+    }
+
+    this.geminiSession.connect(hasPreRecordedFirstMessage, this.agent.firstMessage);
+
+    if (hasPreRecordedFirstMessage) {
+      setImmediate(() => {
+        this._playPreRecordedFirstMessage(preRecordedFilePath);
+      });
+    }
+  }
+
+  _playPreRecordedFirstMessage(filePath) {
+    try {
+      this._log('info', `Playing pre-recorded first message audio from ${filePath}`);
+      const audioBuffer = fs.readFileSync(filePath);
+      if (audioBuffer.length > 44) {
+        const srcRate = audioBuffer.readUInt32LE(24);
+        const rawPcm = audioBuffer.slice(44);
+        const TARGET_RATE = 16000;
+        const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
+
+        if (this.onAgentTranscription && this.agent.firstMessage) {
+          this.onAgentTranscription(this.agent.firstMessage);
+        }
+        
+        this.isAgentSpeaking = true;
+        const wordCount = (this.agent.firstMessage || '').split(/\s+/).filter(Boolean).length;
+        const durationMs = Math.max(1500, wordCount * 450);
+        if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
+        this.speakingTimeout = setTimeout(() => {
+          this.isAgentSpeaking = false;
+        }, durationMs);
+
+        if (this.onAudioOutput) {
+          this.onAudioOutput(resampledPcm, TARGET_RATE);
+        }
+      }
+    } catch (err) {
+      this._log('error', `Error playing pre-recorded first message: ${err.message}`);
+    }
   }
 
   _log(level, message) {
