@@ -1,10 +1,28 @@
-const { Agent, Voice, Category, User } = require('../models');
+const { Agent, Voice, Category, User, Setting } = require('../models');
 const ResponseBuilder = require('../utils/response');
 const { createAgentSchema, updateAgentSchema } = require('../validators/agent');
 const { Op } = require('sequelize');
 const SarvamService = require('../services/sarvamService');
 const fs = require('fs');
 const path = require('path');
+
+async function checkSensitiveWords(prompt) {
+  if (!prompt) return false;
+  const lowerPrompt = prompt.toLowerCase();
+  
+  const setting = await Setting.findOne({ where: { key: 'sensitive_words' } });
+  let words = [];
+  if (setting && setting.value && Array.isArray(setting.value)) {
+    words = setting.value;
+  } else {
+    words = ['scam', 'fraud', 'hack', 'abuse', 'illegal', 'terror', 'bomb', 'kill', 'murder', 'phishing', 'spam'];
+  }
+  
+  return words.some(word => {
+    const regex = new RegExp(`\\b${word}\\b`, 'i');
+    return regex.test(lowerPrompt);
+  });
+}
 
 async function handleFirstMessageAudio(agent, firstMessage) {
   if (!firstMessage) {
@@ -134,6 +152,15 @@ class AgentController {
         }
       }
 
+      let finalActiveStatus = activeStatus !== undefined ? activeStatus : true;
+      let approvalStatus = 'approved';
+
+      const hasSensitive = await checkSensitiveWords(systemPrompt) || await checkSensitiveWords(firstMessage);
+      if (hasSensitive) {
+        finalActiveStatus = false;
+        approvalStatus = 'pending';
+      }
+
       const agent = await Agent.create({
         userId: req.user.id,
         name,
@@ -143,7 +170,8 @@ class AgentController {
         voiceId,
         categoryId: categoryId || req.user.categoryId,
         isCustom: true,
-        activeStatus,
+        activeStatus: finalActiveStatus,
+        approvalStatus,
         allowInterruption,
         pace,
         temperature,
@@ -198,18 +226,39 @@ class AgentController {
         }
       }
 
+      let finalActiveStatus = activeStatus !== undefined ? activeStatus : agent.activeStatus;
+      let finalApprovalStatus = agent.approvalStatus;
+
+      const newSystemPrompt = systemPrompt !== undefined ? systemPrompt : agent.systemPrompt;
+      const newFirstMessage = firstMessage !== undefined ? firstMessage : agent.firstMessage;
+
+      // Only re-check if prompts changed
+      if (systemPrompt !== undefined || firstMessage !== undefined) {
+        const hasSensitive = await checkSensitiveWords(newSystemPrompt) || await checkSensitiveWords(newFirstMessage);
+        if (hasSensitive) {
+          finalActiveStatus = false;
+          finalApprovalStatus = 'pending';
+        } else {
+          // If they remove sensitive words, we can optionally auto-approve, or leave as is. 
+          // Let's leave approvalStatus as approved if it was pending and now clean? 
+          // Actually, if it's clean, let's mark it approved if they updated it themselves.
+          finalApprovalStatus = 'approved';
+        }
+      }
+
       await agent.update({
         name: name !== undefined ? name : agent.name,
         description: description !== undefined ? description : agent.description,
-        systemPrompt: systemPrompt !== undefined ? systemPrompt : agent.systemPrompt,
+        systemPrompt: newSystemPrompt,
         language: language !== undefined ? language : agent.language,
         voiceId: voiceId !== undefined ? voiceId : agent.voiceId,
         categoryId: categoryId !== undefined ? categoryId : agent.categoryId,
-        activeStatus: activeStatus !== undefined ? activeStatus : agent.activeStatus,
+        activeStatus: finalActiveStatus,
+        approvalStatus: finalApprovalStatus,
         allowInterruption: allowInterruption !== undefined ? allowInterruption : agent.allowInterruption,
         pace: pace !== undefined ? pace : agent.pace,
         temperature: temperature !== undefined ? temperature : agent.temperature,
-        firstMessage: firstMessage !== undefined ? firstMessage : agent.firstMessage,
+        firstMessage: newFirstMessage,
         aiProvider: aiProvider !== undefined ? aiProvider : agent.aiProvider,
       });
 

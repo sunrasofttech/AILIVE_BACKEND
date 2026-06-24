@@ -67,6 +67,11 @@ Agent.init(
       defaultValue: true,
       field: 'active_status',
     },
+    approvalStatus: {
+      type: DataTypes.STRING(20),
+      defaultValue: 'approved', // 'pending', 'approved', 'rejected'
+      field: 'approval_status',
+    },
     allowInterruption: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,

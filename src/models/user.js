@@ -42,6 +42,11 @@ User.init(
       type: DataTypes.STRING(20),
       defaultValue: 'merchant',
     },
+    kycStatus: {
+      type: DataTypes.STRING(20),
+      defaultValue: 'none', // 'none', 'pending', 'full'
+      field: 'kyc_status',
+    },
     isVerified: {
       type: DataTypes.BOOLEAN,
       defaultValue: false,

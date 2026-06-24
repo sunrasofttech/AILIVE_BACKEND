@@ -19,6 +19,7 @@ const CallLog = require('./callLog');
 const CallReport = require('./callReport');
 const Notification = require('./notification');
 const AuditLog = require('./auditLog');
+const Setting = require('./setting');
 
 // Establish Relationships
 
@@ -189,4 +190,5 @@ module.exports = {
   CallReport,
   Notification,
   AuditLog,
+  Setting,
 };

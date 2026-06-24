@@ -16,6 +16,7 @@ const campaignRoutes = require('./routes/campaignRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const voiceRoutes = require('./routes/voiceRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 // Swagger Spec
 const swaggerSpec = require('./utils/swagger');
@@ -142,6 +143,7 @@ app.use('/api/v1/campaigns', campaignRoutes);
 app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
 app.use('/api/v1/voices', voiceRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // Web Tester UI Route
 app.get('/test-call', (req, res) => {

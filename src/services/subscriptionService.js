@@ -1,4 +1,4 @@
-const { Subscription, Plan } = require('../models');
+const { Subscription, Plan, User } = require('../models');
 
 class SubscriptionService {
   /**
@@ -27,6 +27,26 @@ class SubscriptionService {
       await subscription.save();
       return { isValid: false, reason: 'Subscription plan has expired.' };
     }
+
+    // --- 48h Wait Rate Limit / Full KYC Enforcement ---
+    const user = await User.findByPk(userId);
+    if (user && user.kycStatus !== 'full') {
+      const hoursSinceStart = (new Date() - new Date(subscription.startDate)) / (1000 * 60 * 60);
+      
+      const { Setting } = require('../models');
+      const rateLimitSetting = await Setting.findOne({ where: { key: 'kyc_rate_limit_calls' } });
+      const MAX_PROBATION_CALLS = rateLimitSetting ? parseInt(rateLimitSetting.value, 10) : 10;
+
+      if (hoursSinceStart < 48) {
+        if (subscription.callsUsed >= MAX_PROBATION_CALLS) {
+          return { isValid: false, reason: `You have reached the 48-hour probationary rate limit (${MAX_PROBATION_CALLS} calls). Please complete Full KYC to unlock full plan limits.` };
+        }
+      } else {
+        // After 48 hours, full block if no KYC
+        return { isValid: false, reason: 'Your 48-hour probationary period has ended. Please complete Full KYC to continue making calls.' };
+      }
+    }
+    // --------------------------------------------------
 
     // Starter plan: Max 5 calls, but wait, Starter has callLimit = 5
     // Validate call quota. (Starter is free, no credits required but Max 5 calls total)
