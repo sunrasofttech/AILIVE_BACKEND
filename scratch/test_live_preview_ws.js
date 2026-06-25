@@ -10,35 +10,42 @@ if (!API_KEY) {
 const MODEL_NAME = "gemini-3.1-flash-live-preview";
 const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
 
-console.log(`Connecting to: wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=***`);
+console.log(`Connecting...`);
 const websocket = new WebSocket(WS_URL);
 
 websocket.on('open', () => {
   console.log('WebSocket Connected');
 
-  // Send the initial configuration
+  // Full setup message matching geminiMultimodalLiveService.js
   const setupMessage = {
     setup: {
       model: `models/${MODEL_NAME}`,
       generationConfig: {
-        responseModalities: ['AUDIO']
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: 'Puck',
+            },
+          },
+        },
       },
       systemInstruction: {
-        parts: [{ text: 'You are a helpful assistant.' }]
-      }
-    }
+        parts: [{ text: 'You are a helpful assistant.' }],
+      },
+      realtimeInputConfig: {
+        activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
+      },
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+    },
   };
   websocket.send(JSON.stringify(setupMessage));
-  console.log('Configuration sent:', JSON.stringify(setupMessage, null, 2));
+  console.log('Full Setup sent.');
 });
 
 websocket.on('message', (data) => {
-  try {
-    const response = JSON.parse(data.toString());
-    console.log('Received JSON:', JSON.stringify(response, null, 2));
-  } catch (err) {
-    console.log('Received raw:', data.toString());
-  }
+  console.log('Received:', data.toString());
 });
 
 websocket.on('error', (error) => {

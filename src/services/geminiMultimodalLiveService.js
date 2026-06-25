@@ -10,7 +10,9 @@ class GeminiMultimodalLiveSession extends EventEmitter {
     this.modelName = this._formatModelName(rawModel);
 
     this.systemPrompt = systemPrompt;
-    this.voiceName = voiceName || 'Aoede';
+    const validVoices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'];
+    const matchedVoice = validVoices.find(v => v.toLowerCase() === (voiceName || '').toLowerCase());
+    this.voiceName = matchedVoice || 'Puck';
     this.allowInterruption = allowInterruption;
 
     this.onAudioOutput = onAudioOutput; // (pcmBuffer, sampleRate)
