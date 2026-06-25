@@ -182,7 +182,15 @@ class VoicePipeline {
     this.sarvamSttStream = new SarvamSTTStream({
       languageCode: language,
       onTranscript: (transcript) => {
+        this._log('info', `[STT partial] ${transcript}`);
         this._handleRealtimeTranscript(transcript);
+      },
+      onSpeechEnd: () => {
+        this._log('info', '[STT] END_SPEECH detected — flushing transcript');
+        if (this.sarvamSttStream) {
+          this.sarvamSttStream.flush();
+        }
+        setTimeout(() => this._flushRealtimeTranscript(), 100);
       },
       onError: (err) => {
         this._log('error', `Sarvam STT WebSocket error: ${err.message}`);
@@ -358,8 +366,21 @@ class VoicePipeline {
       this._activeTtsGeneration = ttsGeneration;
 
       await new Promise((resolve) => {
-        this.sarvamTtsStream.sendText(processedText, () => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
           resolve();
+        };
+
+        const timeout = setTimeout(() => {
+          this._log('warn', `TTS timeout for chunk "${text.substring(0, 40)}..."`);
+          finish();
+        }, 15000);
+
+        this.sarvamTtsStream.sendText(processedText, () => {
+          clearTimeout(timeout);
+          finish();
         });
       });
     } catch (err) {
@@ -378,6 +399,7 @@ class VoicePipeline {
 
         const audioDurationMs = wavDurationMs(audioBuffer);
         this._setAgentSpeaking(audioDurationMs + 300);
+        this._log('info', `Pre-recorded first message duration: ${audioDurationMs}ms`);
 
         const srcRate = audioBuffer.readUInt32LE(24);
         const rawPcm = audioBuffer.slice(44);
@@ -414,27 +436,33 @@ class VoicePipeline {
   }
 
   _flushRealtimeTranscript() {
-    const finalTranscript = this.accumulatedTranscript;
+    const finalTranscript = (this.accumulatedTranscript || '').trim();
+    if (!finalTranscript) {
+      if (this.transcriptionSilenceTimer) {
+        clearTimeout(this.transcriptionSilenceTimer);
+        this.transcriptionSilenceTimer = null;
+      }
+      return;
+    }
+
+    if (!this.agent.allowInterruption && this.isAgentSpeaking) {
+      this._log('info', `[Interruption Blocked] Customer spoke: "${finalTranscript}" — agent still speaking, waiting.`);
+      return;
+    }
+
     this.accumulatedTranscript = '';
     if (this.transcriptionSilenceTimer) {
       clearTimeout(this.transcriptionSilenceTimer);
       this.transcriptionSilenceTimer = null;
     }
 
-    if (finalTranscript && finalTranscript.trim()) {
-      if (!this.agent.allowInterruption && this.isAgentSpeaking) {
-        this._log('info', `[Interruption Blocked] Customer spoke: "${finalTranscript}" — agent still speaking, discarding.`);
-        return;
-      }
-
-      if (this.isAgentSpeaking) {
-        this._cancelAgentSpeech();
-      }
-
-      this._log('info', `Customer spoke (real-time WSS): ${finalTranscript}`);
-      if (this.onCustomerTranscription) this.onCustomerTranscription(finalTranscript);
-      this.geminiSession.sendUserTurn(finalTranscript);
+    if (this.isAgentSpeaking) {
+      this._cancelAgentSpeech();
     }
+
+    this._log('info', `Customer spoke (real-time WSS): ${finalTranscript}`);
+    if (this.onCustomerTranscription) this.onCustomerTranscription(finalTranscript);
+    this.geminiSession.sendUserTurn(finalTranscript);
   }
 
   async handleAudioInput(pcmBuffer) {
@@ -448,6 +476,9 @@ class VoicePipeline {
         this.geminiSession.sendAudioChunk(pcmBuffer);
       }
     } else if (this._usesSarvamRealtime() && this.sarvamSttStream) {
+      if (!this.agent.allowInterruption && this.isAgentSpeaking) {
+        return;
+      }
       this.sarvamSttStream.sendAudio(pcmBuffer);
     }
   }

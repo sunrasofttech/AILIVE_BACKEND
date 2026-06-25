@@ -41,17 +41,21 @@ class SarvamSTTStream {
    * @param {function} params.onTranscript - Callback when new transcript is received
    * @param {function} params.onError - Callback on WebSocket error
    */
-  constructor({ languageCode = defaults.sarvam.defaultLanguageCode, onTranscript, onError }) {
+  constructor({ languageCode = defaults.sarvam.defaultLanguageCode, onTranscript, onSpeechEnd, onError }) {
     this.apiKey = defaults.sarvam.apiKey;
     this.apiBaseUrl = defaults.sarvam.apiBaseUrl || 'https://api.sarvam.ai';
     this.languageCode = SARVAM_LOCALE_MAP[languageCode] || languageCode || 'en-IN';
     this.onTranscript = onTranscript;
+    this.onSpeechEnd = onSpeechEnd;
     this.onError = onError;
 
     this.ws = null;
     this.isMock = !this.apiKey || this.apiKey === 'your_sarvam_api_key';
     this.isConnected = false;
     this.pendingAudioChunks = [];
+    this.pcmBatchBuffer = [];
+    this.pcmBatchBytes = 0;
+    this.PCM_BATCH_TARGET_BYTES = 3200;
 
     // Local buffering for mock mode
     this.mockTimer = null;
@@ -89,18 +93,36 @@ class SarvamSTTStream {
           const queued = this.pendingAudioChunks;
           this.pendingAudioChunks = [];
           for (const chunk of queued) {
-            this._sendAudioPayload(chunk);
+            this.pcmBatchBuffer.push(chunk);
+            this.pcmBatchBytes += chunk.length;
           }
+          this._flushPcmBatch();
         }
       });
 
       this.ws.on('message', (data) => {
         try {
           const parsed = JSON.parse(data.toString());
+
           if (parsed.type === 'data' && parsed.data?.transcript) {
             if (this.onTranscript) {
               this.onTranscript(parsed.data.transcript);
             }
+            return;
+          }
+
+          if (parsed.type === 'events') {
+            const signalType = parsed.data?.signal_type || parsed.data?.event_type;
+            if (signalType === 'END_SPEECH' && this.onSpeechEnd) {
+              this.onSpeechEnd();
+            }
+            return;
+          }
+
+          if (parsed.type === 'error') {
+            const errMsg = parsed.data?.error || parsed.data?.message || JSON.stringify(parsed.data);
+            console.error('[Sarvam STT WSS] API error:', errMsg);
+            if (this.onError) this.onError(new Error(errMsg));
           }
         } catch (err) {
           // Ignore JSON parsing errors
@@ -125,7 +147,6 @@ class SarvamSTTStream {
   sendAudio(pcmBuffer) {
     if (this.isMock) {
       if (!this.isConnected) return;
-      // Simulate silence detection and transcription in mock mode
       if (this.mockTimer) clearTimeout(this.mockTimer);
       this.mockTimer = setTimeout(() => {
         const transcript = this.mockResponses[Math.floor(Math.random() * this.mockResponses.length)];
@@ -136,10 +157,32 @@ class SarvamSTTStream {
       return;
     }
 
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      if (this.ws) {
+        this.pendingAudioChunks.push(pcmBuffer);
+      }
+      return;
+    }
+
+    this.pcmBatchBuffer.push(pcmBuffer);
+    this.pcmBatchBytes += pcmBuffer.length;
+
+    if (this.pcmBatchBytes >= this.PCM_BATCH_TARGET_BYTES) {
+      this._flushPcmBatch();
+    }
+  }
+
+  _flushPcmBatch() {
+    if (this.pcmBatchBytes === 0) return;
+
+    const combined = Buffer.concat(this.pcmBatchBuffer);
+    this.pcmBatchBuffer = [];
+    this.pcmBatchBytes = 0;
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this._sendAudioPayload(pcmBuffer);
+      this._sendAudioPayload(combined);
     } else if (this.ws) {
-      this.pendingAudioChunks.push(pcmBuffer);
+      this.pendingAudioChunks.push(combined);
     }
   }
 
@@ -158,6 +201,8 @@ class SarvamSTTStream {
   }
 
   flush() {
+    this._flushPcmBatch();
+
     if (!this.isConnected) return;
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -168,6 +213,8 @@ class SarvamSTTStream {
   close() {
     this.isConnected = false;
     this.pendingAudioChunks = [];
+    this.pcmBatchBuffer = [];
+    this.pcmBatchBytes = 0;
     if (this.mockTimer) clearTimeout(this.mockTimer);
     if (this.ws) {
       try {
