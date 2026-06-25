@@ -2,26 +2,9 @@ const { GeminiLiveSession } = require('./geminiLiveService');
 const { GeminiMultimodalLiveSession } = require('./geminiMultimodalLiveService');
 const { SarvamLiveSession } = require('./sarvamLiveService');
 const { SarvamSTTStream, SarvamTTSStream } = require('./sarvamSocketService');
-const SarvamService = require('./sarvamService');
 const defaults = require('../config/defaults');
 const fs = require('fs');
 const path = require('path');
-
-/**
- * Compute the Root Mean Square (RMS) energy of a mono 16-bit PCM buffer.
- * @param {Buffer} pcmBuffer
- * @returns {number}
- */
-function computeRMS(pcmBuffer) {
-  if (pcmBuffer.length < 2) return 0;
-  let sum = 0;
-  const numSamples = Math.floor(pcmBuffer.length / 2);
-  for (let i = 0; i < numSamples; i++) {
-    const sample = pcmBuffer.readInt16LE(i * 2);
-    sum += sample * sample;
-  }
-  return Math.sqrt(sum / numSamples);
-}
 
 /**
  * Downsample 16-bit mono PCM from inputRate to outputRate using linear interpolation.
@@ -49,50 +32,32 @@ function resamplePCM(inputBuffer, inputRate, outputRate) {
  */
 function stripMarkdown(text) {
   return text
-    .replace(/\*\*(.*?)\*\*/g, '$1')  // bold
-    .replace(/\*(.*?)\*/g, '$1')       // italic
-    .replace(/`([^`]*)`/g, '$1')       // inline code
-    .replace(/#{1,6}\s/g, '')          // headings
-    .replace(/^\s*[-*+]\s+/gm, '')    // bullet points
-    .replace(/^\s*\d+\.\s+/gm, '')   // numbered lists
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
-    .replace(/\n{3,}/g, '\n\n')       // excess newlines
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/#{1,6}\s/g, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
 /**
- * Preprocess text for natural-sounding TTS (ElevenLabs-style quality).
- * Expands abbreviations, numbers, and adds rhythm markers.
+ * Preprocess text for natural-sounding TTS.
  */
 function preprocessForTTS(text) {
   return text
-    // Expand common abbreviations for natural pronunciation
     .replace(/\bMr\./g, 'Mister')
     .replace(/\bMrs\./g, 'Misses')
     .replace(/\bDr\./g, 'Doctor')
     .replace(/\bvs\./gi, 'versus')
     .replace(/\betc\./gi, 'etcetera')
-    // Spell out numbers for natural reading
     .replace(/\b(\d{1,2}):(\d{2})\s*(AM|PM)\b/gi, (_, h, m, period) =>
       `${h}:${m} ${period}`)
-    // Add natural pause after sentence-ending punctuation
     .replace(/([.!?])\s+/g, '$1  ')
-    // Normalize whitespace
     .replace(/\s{3,}/g, '  ')
     .trim();
-}
-
-/**
- * Split a response into sentence-level chunks for streaming TTS.
- * This gives ElevenLabs-like progressive audio output — the first sentence
- * plays while remaining sentences are still being synthesized.
- */
-function splitIntoSentences(text) {
-  // Split on sentence-ending punctuation, keep the delimiter
-  const raw = text.match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [text];
-  return raw
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
 }
 
 /**
@@ -113,37 +78,30 @@ function wavDurationMs(wavBuffer) {
 }
 
 /**
- * VoicePipeline orchestrates the audio processing loop independent of the transport layer.
- * It handles STT transcription, Gemini responses, and TTS synthesis.
- * 
- * Quality improvements:
- * - Sentence-level streaming TTS for low Time to First Audio (like ElevenLabs)
- * - Accurate isAgentSpeaking tracking based on actual WAV duration
- * - Correct allow_interruption enforcement with audio buffer clearing
+ * VoicePipeline orchestrates STT, LLM streaming, and TTS over WebSockets for custom/customv2.
  */
 class VoicePipeline {
   constructor(options) {
     this.agent = options.agent;
-    this.onAudioOutput = options.onAudioOutput; // (pcmBuffer, sampleRate)
-    this.onClearAudio = options.onClearAudio;   // ()
-    this.onAgentTranscription = options.onAgentTranscription; // (text)
-    this.onCustomerTranscription = options.onCustomerTranscription; // (text)
-    this.onError = options.onError; // (error)
-    this.onLog = options.onLog; // (level, message)
+    this.onAudioOutput = options.onAudioOutput;
+    this.onClearAudio = options.onClearAudio;
+    this.onAgentTranscription = options.onAgentTranscription;
+    this.onCustomerTranscription = options.onCustomerTranscription;
+    this.onError = options.onError;
+    this.onLog = options.onLog;
 
     this.isAgentSpeaking = false;
     this.speakingTimeout = null;
-
-    // Sentence-level TTS streaming queue to ensure ordered playback
     this._ttsQueue = Promise.resolve();
     this._ttsGeneration = 0;
+    this._activeTtsGeneration = null;
 
-    this.audioInputBuffer = [];
-    this.silenceTimer = null;
-    this.maxDurationTimer = null;
-    this.SILENCE_TIMEOUT_MS = 800; // Increased to 800ms for natural pauses
-    this.MAX_BUFFER_DURATION_MS = 7000; // Increased to 7 seconds to prevent premature cutoffs
-    this.MIN_BUFFER_BYTES = 9600; // Increased to 300ms of audio to filter out clicks/pops
+    this.accumulatedTranscript = '';
+    this.transcriptionSilenceTimer = null;
+    this.SILENCE_TIMEOUT_MS = 500;
+
+    this.sarvamSttStream = null;
+    this.sarvamTtsStream = null;
 
     this.isConnected = true;
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
@@ -159,12 +117,9 @@ class VoicePipeline {
         voiceName: this.agent.voice?.voiceId || 'Puck',
         allowInterruption: this.agent.allowInterruption !== false,
         onAudioOutput: (pcmBuffer, sampleRate) => {
-          // Resample Gemini's native 24kHz down to Vobiz 16kHz
           const resampledPcm = resamplePCM(pcmBuffer, sampleRate, 16000);
-
           const rawDurationMs = Math.round((resampledPcm.length / 32000) * 1000);
           this._setAgentSpeaking(rawDurationMs + 300);
-
           if (this.onAudioOutput) this.onAudioOutput(resampledPcm, 16000);
         },
         onTranscription: (text, role) => {
@@ -184,9 +139,6 @@ class VoicePipeline {
         onClose: (closeInfo = {}) => {
           this._log('info', 'Gemini Multimodal Live session closed');
           if (!this.isConnected || this._isSwitchingProvider || this.activeProvider !== 'geminilive') return;
-
-          // If live session cannot start (unsupported/invalid model or bidi unavailable),
-          // fall back to the custom STT->Gemini REST->TTS flow instead of dropping the call.
           if (!closeInfo.wasSetupComplete) {
             this._fallbackToCustomProvider(`code=${closeInfo.code}, reason=${closeInfo.reason || 'unknown'}`);
           }
@@ -194,28 +146,15 @@ class VoicePipeline {
       });
     } else if (this.activeProvider === 'customv2') {
       this.geminiSession = this._createCustomv2Session();
-
-      // Initialize real-time STT WebSocket Stream
-      this.accumulatedTranscript = '';
-      this.transcriptionSilenceTimer = null;
-      this.sarvamSttStream = new SarvamSTTStream({
-        languageCode: this.agent.language,
-        onTranscript: (transcript) => {
-          this._handleRealtimeTranscript(transcript);
-        },
-        onError: (err) => {
-          this._log('error', `Sarvam STT WebSocket error: ${err.message}`);
-        },
-      });
-      this.sarvamSttStream.connect();
+      this._initSarvamRealtimeStreams();
     } else {
       this.geminiSession = this._createCustomGeminiSession();
+      this._initSarvamRealtimeStreams();
     }
 
     let hasPreRecordedFirstMessage = false;
     let preRecordedFilePath = null;
 
-    // Pre-recorded first message uses Sarvam TTS — only for the custom (STT+REST+TTS) provider.
     if (this.activeProvider !== 'geminilive' && this.agent.firstMessageAudioPath) {
       preRecordedFilePath = path.resolve(process.cwd(), this.agent.firstMessageAudioPath);
       if (fs.existsSync(preRecordedFilePath)) {
@@ -232,8 +171,41 @@ class VoicePipeline {
     }
   }
 
+  _usesSarvamRealtime() {
+    return this.activeProvider === 'custom' || this.activeProvider === 'customv2';
+  }
+
+  _initSarvamRealtimeStreams() {
+    const language = this.agent.language || defaults.sarvam.defaultLanguageCode;
+    const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
+
+    this.sarvamSttStream = new SarvamSTTStream({
+      languageCode: language,
+      onTranscript: (transcript) => {
+        this._handleRealtimeTranscript(transcript);
+      },
+      onError: (err) => {
+        this._log('error', `Sarvam STT WebSocket error: ${err.message}`);
+      },
+    });
+    this.sarvamSttStream.connect();
+
+    this.sarvamTtsStream = new SarvamTTSStream({
+      languageCode: language,
+      voiceId: voiceName,
+      onAudioChunk: (audioBuffer) => {
+        this._playTtsAudioChunk(audioBuffer, this._activeTtsGeneration);
+      },
+      onError: (err) => {
+        this._log('error', `Sarvam TTS WebSocket error: ${err.message}`);
+      },
+    });
+    this.sarvamTtsStream.connect();
+  }
+
   _cancelAgentSpeech() {
     this._ttsGeneration++;
+    this._activeTtsGeneration = null;
     this.isAgentSpeaking = false;
     if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
     if (this.onClearAudio) this.onClearAudio();
@@ -255,22 +227,11 @@ class VoicePipeline {
         }
       },
       onResponseSentence: async (sentenceText, ttsGeneration) => {
-        try {
-          const cleanText = stripMarkdown(sentenceText);
-          if (!cleanText) return;
-
-          // Schedule sentence TTS synthesis under the specific ttsGeneration
-          this._ttsQueue = this._ttsQueue.then(() =>
-            this._synthesizeAndPlay(cleanText, ttsGeneration)
-          );
-        } catch (err) {
-          this._log('error', `TTS pipeline failure: ${err.message}`);
-          if (this.onError) this.onError(err);
-        }
+        this._enqueueTtsPhrase(sentenceText, ttsGeneration);
       },
       onStartResponse: () => {
-        // Set agent speaking immediately, increment generation ID and return it
         const ttsGeneration = ++this._ttsGeneration;
+        this._activeTtsGeneration = ttsGeneration;
         this._setAgentSpeaking(3000);
         return ttsGeneration;
       },
@@ -297,22 +258,11 @@ class VoicePipeline {
         }
       },
       onResponseSentence: async (sentenceText, ttsGeneration) => {
-        try {
-          const cleanText = stripMarkdown(sentenceText);
-          if (!cleanText) return;
-
-          // Schedule sentence TTS synthesis under the specific ttsGeneration
-          this._ttsQueue = this._ttsQueue.then(() =>
-            this._synthesizeAndPlay(cleanText, ttsGeneration)
-          );
-        } catch (err) {
-          this._log('error', `TTS pipeline failure: ${err.message}`);
-          if (this.onError) this.onError(err);
-        }
+        this._enqueueTtsPhrase(sentenceText, ttsGeneration);
       },
       onStartResponse: () => {
-        // Set agent speaking immediately, increment generation ID and return it
         const ttsGeneration = ++this._ttsGeneration;
+        this._activeTtsGeneration = ttsGeneration;
         this._setAgentSpeaking(3000);
         return ttsGeneration;
       },
@@ -324,6 +274,20 @@ class VoicePipeline {
         this._log('info', 'Sarvam session closed');
       },
     });
+  }
+
+  _enqueueTtsPhrase(sentenceText, ttsGeneration) {
+    try {
+      const cleanText = stripMarkdown(sentenceText);
+      if (!cleanText) return;
+
+      this._ttsQueue = this._ttsQueue.then(() =>
+        this._synthesizeAndPlay(cleanText, ttsGeneration)
+      );
+    } catch (err) {
+      this._log('error', `TTS pipeline failure: ${err.message}`);
+      if (this.onError) this.onError(err);
+    }
   }
 
   _fallbackToCustomProvider(reason) {
@@ -340,6 +304,7 @@ class VoicePipeline {
 
     this.activeProvider = 'custom';
     this.geminiSession = this._createCustomGeminiSession();
+    this._initSarvamRealtimeStreams();
 
     let hasPreRecordedFirstMessage = false;
     let preRecordedFilePath = null;
@@ -356,11 +321,6 @@ class VoicePipeline {
     this._isSwitchingProvider = false;
   }
 
-  /**
-   * Set isAgentSpeaking = true and schedule automatic reset after durationMs.
-   * Cancels any previous timer.
-   * @param {number} durationMs
-   */
   _setAgentSpeaking(durationMs) {
     this.isAgentSpeaking = true;
     if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
@@ -369,89 +329,44 @@ class VoicePipeline {
     }, durationMs);
   }
 
-  /**
-   * Synthesize a single sentence/chunk via Sarvam TTS and stream it.
-   * Updates isAgentSpeaking with the actual WAV audio duration.
-   * @param {string} text
-   */
+  _playTtsAudioChunk(audioBuffer, ttsGeneration) {
+    if (!this.isConnected) return;
+    if (ttsGeneration !== undefined && ttsGeneration !== this._ttsGeneration) return;
+
+    let rawPcm = audioBuffer;
+    let srcRate = 16000;
+    if (audioBuffer.length > 44 && audioBuffer.toString('utf8', 8, 12) === 'WAVE') {
+      srcRate = audioBuffer.readUInt32LE(24);
+      rawPcm = audioBuffer.slice(44);
+    }
+
+    const TARGET_RATE = 16000;
+    const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
+    const rawDurationMs = Math.round((resampledPcm.length / 32000) * 1000);
+    this._setAgentSpeaking(rawDurationMs + 300);
+
+    if (this.onAudioOutput) this.onAudioOutput(resampledPcm, TARGET_RATE);
+  }
+
   async _synthesizeAndPlay(text, ttsGeneration) {
     if (!this.isConnected || !text.trim()) return;
     if (ttsGeneration !== undefined && ttsGeneration !== this._ttsGeneration) return;
+    if (!this.sarvamTtsStream) return;
 
     try {
       const processedText = preprocessForTTS(text);
-      const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
-      const language = this.agent.language || defaults.sarvam.defaultLanguageCode;
+      this._activeTtsGeneration = ttsGeneration;
 
-      if (this.activeProvider === 'customv2') {
-        // Stream text chunk and play audio chunks over WebSocket in real-time
-        return new Promise((resolve) => {
-          let ttsStream = new SarvamTTSStream({
-            languageCode: language,
-            voiceId: voiceName,
-            onAudioChunk: (audioBuffer) => {
-              if (!this.isConnected) return;
-              if (ttsGeneration !== undefined && ttsGeneration !== this._ttsGeneration) {
-                ttsStream.close();
-                resolve();
-                return;
-              }
-
-              let rawPcm = audioBuffer;
-              let srcRate = 16000;
-              if (audioBuffer.length > 44 && audioBuffer.toString('utf8', 8, 12) === 'WAVE') {
-                srcRate = audioBuffer.readUInt32LE(24);
-                rawPcm = audioBuffer.slice(44);
-              }
-
-              const TARGET_RATE = 16000;
-              const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
-
-              const rawDurationMs = Math.round((resampledPcm.length / 32000) * 1000);
-              this._setAgentSpeaking(rawDurationMs + 300);
-
-              if (this.onAudioOutput) this.onAudioOutput(resampledPcm, TARGET_RATE);
-            },
-            onDone: () => {
-              resolve();
-            },
-            onError: (err) => {
-              this._log('error', `Sarvam TTS WebSocket Stream error: ${err.message}`);
-              resolve();
-            },
-          });
-
-          ttsStream.connect();
-          ttsStream.sendText(processedText);
+      await new Promise((resolve) => {
+        this.sarvamTtsStream.sendText(processedText, () => {
+          resolve();
         });
-      }
-
-      const audioBuffer = await SarvamService.synthesizeText(processedText, voiceName, language, {
-        pace: this.agent.pace,
-        temperature: this.agent.temperature,
       });
-
-      if (!this.isConnected || audioBuffer.length <= 44) return;
-      if (ttsGeneration !== undefined && ttsGeneration !== this._ttsGeneration) return;
-
-      // ── FIX: compute actual audio duration and extend speaking window ──
-      const audioDurationMs = wavDurationMs(audioBuffer);
-      this._setAgentSpeaking(audioDurationMs + 300); // +300ms buffer after audio ends
-
-      const srcRate = audioBuffer.readUInt32LE(24);
-      const rawPcm = audioBuffer.slice(44);
-      const TARGET_RATE = 16000;
-      const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
-
-      if (this.onAudioOutput) this.onAudioOutput(resampledPcm, TARGET_RATE);
     } catch (err) {
       this._log('error', `TTS synthesis failure for chunk "${text}": ${err.message}`);
     }
   }
 
-  /**
-   * Play a pre-synthesized first message audio file directly with no delay.
-   */
   _playPreRecordedFirstMessage(filePath) {
     try {
       this._log('info', `Playing pre-recorded first message audio from ${filePath}`);
@@ -487,7 +402,6 @@ class VoicePipeline {
   _handleRealtimeTranscript(transcript) {
     if (!transcript || !transcript.trim()) return;
 
-    // Reset silence timer on every new transcript chunk
     if (this.transcriptionSilenceTimer) {
       clearTimeout(this.transcriptionSilenceTimer);
     }
@@ -523,113 +437,43 @@ class VoicePipeline {
     }
   }
 
-  /**
-   * Handle incoming raw PCM buffer from user's microphone/telephone.
-   * Note: Expects 16000Hz L16 format.
-   * @param {Buffer} pcmBuffer
-   */
   async handleAudioInput(pcmBuffer) {
     if (!this.isConnected) return;
 
     if (this.activeProvider === 'geminilive') {
-      // Interrupt handling
       if (!this.agent.allowInterruption && this.isAgentSpeaking) {
-         // Do not send customer audio to Gemini if interruption is disabled and agent is talking
-         return;
+        return;
       }
-      
-      // Direct stream to Gemini Multimodal Live API
       if (this.geminiSession && typeof this.geminiSession.sendAudioChunk === 'function') {
         this.geminiSession.sendAudioChunk(pcmBuffer);
       }
-    } else if (this.activeProvider === 'customv2') {
-      // Stream directly to Sarvam STT WebSocket in real-time
-      if (this.sarvamSttStream && this.sarvamSttStream.isConnected) {
-        // RMS Noise Gate to ignore silent static/breaths
-        const rms = computeRMS(pcmBuffer);
-        const RMS_THRESHOLD = 250;
-        if (rms < RMS_THRESHOLD) {
-          return;
-        }
-
-        this.sarvamSttStream.sendAudio(pcmBuffer);
-      }
-    } else {
-      // Legacy STT buffering flow
-      this.audioInputBuffer.push(pcmBuffer);
-
-      if (this.silenceTimer) clearTimeout(this.silenceTimer);
-      this.silenceTimer = setTimeout(() => this.flushAudioBuffer(), this.SILENCE_TIMEOUT_MS);
-
-      if (!this.maxDurationTimer) {
-        this.maxDurationTimer = setTimeout(() => this.flushAudioBuffer(), this.MAX_BUFFER_DURATION_MS);
-      }
+    } else if (this._usesSarvamRealtime() && this.sarvamSttStream) {
+      this.sarvamSttStream.sendAudio(pcmBuffer);
     }
   }
 
-  /**
-   * Transcribe buffered audio and send to Gemini.
-   */
-  async flushAudioBuffer() {
-    if (this.activeProvider === 'geminilive') return; // Handled natively in real-time
+  async flushPendingInput() {
+    if (!this._usesSarvamRealtime()) return;
 
-    if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
-    if (this.maxDurationTimer) { clearTimeout(this.maxDurationTimer); this.maxDurationTimer = null; }
-
-    if (this.audioInputBuffer.length === 0) return;
-    const combinedBuffer = Buffer.concat(this.audioInputBuffer);
-    this.audioInputBuffer = [];
-
-    if (combinedBuffer.length < this.MIN_BUFFER_BYTES || !this.isConnected) return;
-
-    // RMS Noise Gate to ignore silent static/breaths
-    const rms = computeRMS(combinedBuffer);
-    const RMS_THRESHOLD = 250; // Ignore anything under 250 RMS energy (silence/ambient hum)
-    if (rms < RMS_THRESHOLD) {
-      this._log('info', `[Noise Gate] Discarding buffer as silence/noise (RMS: ${rms.toFixed(1)} < ${RMS_THRESHOLD})`);
-      return;
+    if (this.sarvamSttStream) {
+      this.sarvamSttStream.flush();
     }
-
-    try {
-      const transcript = await SarvamService.transcribeAudioChunk(combinedBuffer, this.agent.language);
-
-      if (transcript && transcript.trim()) {
-        // ── FIX: properly enforce allow_interruption ──
-        if (!this.agent.allowInterruption && this.isAgentSpeaking) {
-          this._log('info', `[Interruption Blocked] Customer spoke: "${transcript}" — agent still speaking, discarding.`);
-          // Clear buffer so the same audio doesn't replay on next flush
-          this.audioInputBuffer = [];
-          return;
-        }
-
-        // Customer interrupted — stop agent audio immediately
-        if (this.isAgentSpeaking) {
-          this._cancelAgentSpeech();
-        }
-
-        this._log('info', `Customer spoke: ${transcript}`);
-        if (this.onCustomerTranscription) this.onCustomerTranscription(transcript);
-        this.geminiSession.sendUserTurn(transcript);
-      }
-    } catch (err) {
-      this._log('error', `[STT] Transcription error: ${err.message}`);
-    }
+    this._flushRealtimeTranscript();
   }
 
-  /**
-   * Close connections and clean up resources.
-   */
   async close() {
     this.isConnected = false;
-    if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
-    if (this.maxDurationTimer) { clearTimeout(this.maxDurationTimer); this.maxDurationTimer = null; }
     if (this.speakingTimeout) { clearTimeout(this.speakingTimeout); this.speakingTimeout = null; }
     if (this.transcriptionSilenceTimer) { clearTimeout(this.transcriptionSilenceTimer); this.transcriptionSilenceTimer = null; }
+    await this.flushPendingInput();
     if (this.sarvamSttStream) {
       this.sarvamSttStream.close();
       this.sarvamSttStream = null;
     }
-    await this.flushAudioBuffer();
+    if (this.sarvamTtsStream) {
+      this.sarvamTtsStream.close();
+      this.sarvamTtsStream = null;
+    }
     this.geminiSession.close();
   }
 }

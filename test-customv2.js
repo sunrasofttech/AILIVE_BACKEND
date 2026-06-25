@@ -219,14 +219,18 @@ async function testRealSarvamWebSockets() {
       onAudioChunk: (buf) => {
         console.log(` > [Mock TTS Audio Chunk]: Received ${buf.length} bytes`);
       },
-      onDone: () => {
-        console.log(' > [Mock TTS Done]');
+      onError: (err) => {
+        console.error('❌ [Mock TTS Error]:', err.message);
         ttsMock.close();
         resolve();
       },
     });
     ttsMock.connect();
-    ttsMock.sendText('Hello, this is a websocket streaming test.');
+    ttsMock.sendText('Hello, this is a websocket streaming test.', () => {
+      console.log(' > [Mock TTS Done]');
+      ttsMock.close();
+      resolve();
+    });
   });
 
   // 3. Real WSS check if API key exists
@@ -244,19 +248,18 @@ async function testRealSarvamWebSockets() {
       onAudioChunk: (buf) => {
         console.log(` > [Real TTS Audio Chunk]: Received ${buf.length} bytes`);
       },
-      onDone: () => {
-        console.log(' > [Real TTS Done]');
-        ttsReal.close();
-        resolve();
-      },
       onError: (err) => {
         console.error('❌ [Real TTS Error]:', err.message);
         ttsReal.close();
         resolve();
-      }
+      },
     });
     ttsReal.connect();
-    ttsReal.sendText('Hello.');
+    ttsReal.sendText('Hello.', () => {
+      console.log(' > [Real TTS Done]');
+      ttsReal.close();
+      resolve();
+    });
   });
 }
 

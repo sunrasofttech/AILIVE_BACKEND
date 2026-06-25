@@ -51,6 +51,7 @@ class SarvamSTTStream {
     this.ws = null;
     this.isMock = !this.apiKey || this.apiKey === 'your_sarvam_api_key';
     this.isConnected = false;
+    this.pendingAudioChunks = [];
 
     // Local buffering for mock mode
     this.mockTimer = null;
@@ -72,7 +73,7 @@ class SarvamSTTStream {
 
     try {
       const wsBaseUrl = this.apiBaseUrl.replace(/^http/, 'ws');
-      const url = `${wsBaseUrl}/speech-to-text/ws?language-code=${this.languageCode}`;
+      const url = `${wsBaseUrl}/speech-to-text/ws?language-code=${encodeURIComponent(this.languageCode)}&model=saaras:v3&mode=transcribe&sample_rate=16000&high_vad_sensitivity=true&vad_signals=true&flush_signal=true`;
 
       console.log(`[Sarvam STT WSS] Connecting to: ${url}`);
       this.ws = new WebSocket(url, {
@@ -84,6 +85,13 @@ class SarvamSTTStream {
       this.ws.on('open', () => {
         console.log('[Sarvam STT WSS] Connection established.');
         this.isConnected = true;
+        if (this.pendingAudioChunks.length > 0) {
+          const queued = this.pendingAudioChunks;
+          this.pendingAudioChunks = [];
+          for (const chunk of queued) {
+            this._sendAudioPayload(chunk);
+          }
+        }
       });
 
       this.ws.on('message', (data) => {
@@ -115,9 +123,8 @@ class SarvamSTTStream {
   }
 
   sendAudio(pcmBuffer) {
-    if (!this.isConnected) return;
-
     if (this.isMock) {
+      if (!this.isConnected) return;
       // Simulate silence detection and transcription in mock mode
       if (this.mockTimer) clearTimeout(this.mockTimer);
       this.mockTimer = setTimeout(() => {
@@ -130,20 +137,37 @@ class SarvamSTTStream {
     }
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const wavBuffer = addWavHeader(pcmBuffer, 16000);
-      const payload = JSON.stringify({
-        audio: {
-          data: wavBuffer.toString('base64'),
-          sample_rate: '16000',
-          encoding: 'audio/wav',
-        },
-      });
-      this.ws.send(payload);
+      this._sendAudioPayload(pcmBuffer);
+    } else if (this.ws) {
+      this.pendingAudioChunks.push(pcmBuffer);
+    }
+  }
+
+  _sendAudioPayload(pcmBuffer) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    const wavBuffer = addWavHeader(pcmBuffer, 16000);
+    const payload = JSON.stringify({
+      audio: {
+        data: wavBuffer.toString('base64'),
+        sample_rate: '16000',
+        encoding: 'audio/wav',
+      },
+    });
+    this.ws.send(payload);
+  }
+
+  flush() {
+    if (!this.isConnected) return;
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'flush' }));
     }
   }
 
   close() {
     this.isConnected = false;
+    this.pendingAudioChunks = [];
     if (this.mockTimer) clearTimeout(this.mockTimer);
     if (this.ws) {
       try {
@@ -179,6 +203,8 @@ class SarvamTTSStream {
     this.isMock = !this.apiKey || this.apiKey === 'your_sarvam_api_key';
     this.isConnected = false;
     this.queuedText = null;
+    this.queuedCallbacks = null;
+    this.pendingDoneCallbacks = [];
   }
 
   connect() {
@@ -218,6 +244,10 @@ class SarvamTTSStream {
 
         // Send queued text if any
         if (this.queuedText) {
+          if (this.queuedCallbacks) {
+            this.pendingDoneCallbacks.push(this.queuedCallbacks);
+            this.queuedCallbacks = null;
+          }
           this._sendTextPayload(this.queuedText);
           this.queuedText = null;
         }
@@ -237,7 +267,7 @@ class SarvamTTSStream {
               this.onAudioChunk(audioBuffer);
             }
           } else if (parsed.type === 'event' && (parsed.data?.event === 'final_audio_chunk_generated' || parsed.data?.event_type === 'final')) {
-            if (this.onDone) this.onDone();
+            this._resolveNextDone();
           }
         } catch (err) {
           // Ignore JSON parsing errors
@@ -252,7 +282,7 @@ class SarvamTTSStream {
       this.ws.on('close', (code, reason) => {
         console.log(`[Sarvam TTS WSS] Connection closed. Code: ${code}, Reason: ${reason}`);
         this.isConnected = false;
-        if (this.onDone) this.onDone();
+        this._flushDoneCallbacks();
       });
     } catch (err) {
       console.error('[Sarvam TTS WSS] Connection setup failed:', err.message);
@@ -260,25 +290,42 @@ class SarvamTTSStream {
     }
   }
 
-  sendText(text) {
+  sendText(text, onDone) {
     if (this.isMock) {
-      // Simulate streaming chunks back
+      if (onDone) this.pendingDoneCallbacks.push(onDone);
       setTimeout(() => {
         if (this.onAudioChunk) {
-          // Send 1024 bytes of silent mock audio
           this.onAudioChunk(Buffer.alloc(1024));
         }
         setTimeout(() => {
-          if (this.onDone) this.onDone();
+          this._resolveNextDone();
         }, 300);
       }, 200);
       return;
     }
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (onDone) this.pendingDoneCallbacks.push(onDone);
       this._sendTextPayload(text);
-    } else {
-      this.queuedText = text;
+      return;
+    }
+
+    this.queuedText = text;
+    if (onDone) this.queuedCallbacks = onDone;
+  }
+
+  _resolveNextDone() {
+    const callback = this.pendingDoneCallbacks.shift();
+    if (callback) callback();
+  }
+
+  _flushDoneCallbacks() {
+    while (this.pendingDoneCallbacks.length > 0) {
+      this._resolveNextDone();
+    }
+    if (this.queuedCallbacks) {
+      this.queuedCallbacks();
+      this.queuedCallbacks = null;
     }
   }
 

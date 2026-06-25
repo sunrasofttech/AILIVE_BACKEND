@@ -1,5 +1,6 @@
 const axios = require('axios');
 const defaults = require('../config/defaults');
+const { drainStreamingPhrases } = require('../utils/streamTextChunks');
 
 class SarvamLiveSession {
   /**
@@ -126,6 +127,8 @@ class SarvamLiveSession {
         content: userText,
       });
 
+      const ttsGeneration = this.onStartResponse ? this.onStartResponse() : undefined;
+
       const messages = [
         {
           role: 'system',
@@ -176,10 +179,7 @@ class SarvamLiveSession {
       const stream = response.data;
       let buffer = '';
       let fullResponseText = '';
-      let currentSentence = '';
-
-      // Start response and capture the active ttsGeneration ID
-      const ttsGeneration = this.onStartResponse ? this.onStartResponse() : undefined;
+      let currentPhrase = '';
 
       stream.on('data', (chunk) => {
         const textChunk = chunk.toString('utf8');
@@ -200,16 +200,13 @@ class SarvamLiveSession {
               const token = parsed.choices?.[0]?.delta?.content || '';
               if (token) {
                 fullResponseText += token;
-                currentSentence += token;
+                currentPhrase += token;
 
-                // Check for sentence terminator followed by whitespace
-                const match = currentSentence.match(/([.!?])(\s+)/);
-                if (match) {
-                  const index = match.index + 1; // Keep the punctuation mark
-                  const sentenceToPlay = currentSentence.substring(0, index).trim();
-                  currentSentence = currentSentence.substring(index).trim();
-                  if (sentenceToPlay && this.onResponseSentence) {
-                    this.onResponseSentence(sentenceToPlay, ttsGeneration);
+                const { phrases, remainder } = drainStreamingPhrases(currentPhrase);
+                currentPhrase = remainder;
+                for (const phrase of phrases) {
+                  if (this.onResponseSentence) {
+                    this.onResponseSentence(phrase, ttsGeneration);
                   }
                 }
               }
@@ -225,9 +222,9 @@ class SarvamLiveSession {
         if (!this.isConnected) return;
 
         // Flush remaining text
-        if (currentSentence.trim()) {
+        if (currentPhrase.trim()) {
           if (this.onResponseSentence) {
-            this.onResponseSentence(currentSentence.trim(), ttsGeneration);
+            this.onResponseSentence(currentPhrase.trim(), ttsGeneration);
           }
         }
 

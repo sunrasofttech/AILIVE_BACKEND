@@ -1,5 +1,6 @@
 const axios = require('axios');
 const defaults = require('../config/defaults');
+const { drainStreamingPhrases } = require('../utils/streamTextChunks');
 
 class GeminiLiveSession {
   /**
@@ -125,6 +126,8 @@ class GeminiLiveSession {
         parts: [{ text: userText }],
       });
 
+      const ttsGeneration = this.onStartResponse ? this.onStartResponse() : undefined;
+
       const requestBody = {
         systemInstruction: {
           parts: [{ text: `IMPORTANT: You are a voice AI agent on a phone call. Always respond in plain conversational text only. Never use markdown formatting such as bullet points, bold text (**), asterisks (*), headings (#), or numbered lists. Speak naturally as if talking on the phone.\n\n${this.systemPrompt}` }],
@@ -175,10 +178,7 @@ class GeminiLiveSession {
       const stream = response.data;
       let buffer = '';
       let fullResponseText = '';
-      let currentSentence = '';
-
-      // Start response and capture active ttsGeneration ID
-      const ttsGeneration = this.onStartResponse ? this.onStartResponse() : undefined;
+      let currentPhrase = '';
 
       stream.on('data', (chunk) => {
         const textChunk = chunk.toString('utf8');
@@ -208,16 +208,13 @@ class GeminiLiveSession {
 
               if (token) {
                 fullResponseText += token;
-                currentSentence += token;
+                currentPhrase += token;
 
-                // Check for sentence terminator followed by whitespace
-                const match = currentSentence.match(/([.!?])(\s+)/);
-                if (match) {
-                  const index = match.index + 1; // Keep the punctuation mark
-                  const sentenceToPlay = currentSentence.substring(0, index).trim();
-                  currentSentence = currentSentence.substring(index).trim();
-                  if (sentenceToPlay && this.onResponseSentence) {
-                    this.onResponseSentence(sentenceToPlay, ttsGeneration);
+                const { phrases, remainder } = drainStreamingPhrases(currentPhrase);
+                currentPhrase = remainder;
+                for (const phrase of phrases) {
+                  if (this.onResponseSentence) {
+                    this.onResponseSentence(phrase, ttsGeneration);
                   }
                 }
               }
@@ -233,9 +230,9 @@ class GeminiLiveSession {
         if (!this.isConnected) return;
 
         // Flush remaining text
-        if (currentSentence.trim()) {
+        if (currentPhrase.trim()) {
           if (this.onResponseSentence) {
-            this.onResponseSentence(currentSentence.trim(), ttsGeneration);
+            this.onResponseSentence(currentPhrase.trim(), ttsGeneration);
           }
         }
 
