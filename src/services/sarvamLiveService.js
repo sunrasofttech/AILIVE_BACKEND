@@ -1,15 +1,7 @@
 const axios = require('axios');
 const defaults = require('../config/defaults');
 const { drainStreamingPhrases } = require('../utils/streamTextChunks');
-
-const CONVERSATIONAL_SYSTEM_INSTRUCTION = `IMPORTANT: You are a voice AI agent on a phone call.
-Respond in plain conversational text only.
-Never use markdown formatting like bullet points, bolding (**), asterisks (*), headings (#), or lists.
-Speak in a warm, natural, friendly tone, as if talking to a friend on the phone.
-Keep sentences relatively short, simple, and easy to pronounce.
-Use natural contractions (e.g. "don't", "I'll", "we're", "can't") and natural conversational rhythms.
-Avoid dry, formal, or overly-robotic language.
-If the customer speaks in Hindi or a mix of Hindi and English, match their style and reply in a natural, colloquial conversational manner.`;
+const { buildNaturalSystemInstruction } = require('../utils/naturalConversation');
 
 class SarvamLiveSession {
   /**
@@ -141,7 +133,7 @@ class SarvamLiveSession {
       const messages = [
         {
           role: 'system',
-          content: `${CONVERSATIONAL_SYSTEM_INSTRUCTION}\n\n${this.systemPrompt}`,
+          content: buildNaturalSystemInstruction(this.systemPrompt),
         },
         ...this.conversationHistory,
       ];
@@ -149,7 +141,8 @@ class SarvamLiveSession {
       const requestBody = {
         model: this.modelName,
         messages: messages,
-        temperature: 0.7,
+        temperature: 0.55,
+        max_tokens: 140,
         stream: true,
       };
 
@@ -292,11 +285,11 @@ class SarvamLiveSession {
     
     const lowerText = inputText.toLowerCase();
     if (lowerText.includes('hello') || lowerText.includes('hi')) {
-      reply = "Hello! Thanks for answering. How can I help you today?";
+      reply = "Hi, thanks for answering. How can I help today?";
     } else if (lowerText.includes('interested')) {
-      reply = "That's great! Would you like to schedule an appointment with our team tomorrow?";
+      reply = "That's great. Would tomorrow work for a quick call with our team?";
     } else if (lowerText.includes('tomorrow') || lowerText.includes('schedule') || lowerText.includes('yes')) {
-      reply = "Perfect. I have registered your callback request. Our representative will contact you shortly. Goodbye!";
+      reply = "Perfect, I've noted that. Our team will call you soon. Thanks, and have a good day.";
     } else if (lowerText.includes('not interested') || lowerText.includes('no')) {
       reply = "No problem at all. Thank you for your time. Have a great day!";
     }

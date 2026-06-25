@@ -5,6 +5,7 @@ const { SarvamSTTStream, SarvamTTSStream, SARVAM_LOCALE_MAP } = require('./sarva
 const defaults = require('../config/defaults');
 const fs = require('fs');
 const path = require('path');
+const { normalizeConversationalText } = require('../utils/naturalConversation');
 
 /**
  * Downsample 16-bit mono PCM from inputRate to outputRate using linear interpolation.
@@ -47,16 +48,21 @@ function stripMarkdown(text) {
  * Preprocess text for natural-sounding TTS.
  */
 function preprocessForTTS(text) {
-  return text
+  return normalizeConversationalText(text)
     .replace(/\bMr\./g, 'Mister')
     .replace(/\bMrs\./g, 'Misses')
     .replace(/\bDr\./g, 'Doctor')
     .replace(/\bvs\./gi, 'versus')
     .replace(/\betc\./gi, 'etcetera')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s*[-–—]\s*/g, ', ')
+    .replace(/\s*\/\s*/g, ' or ')
+    .replace(/([.!?]){2,}/g, '$1')
     .replace(/\b(\d{1,2}):(\d{2})\s*(AM|PM)\b/gi, (_, h, m, period) =>
       `${h}:${m} ${period}`)
-    .replace(/([.!?])\s+/g, '$1  ')
-    .replace(/\s{3,}/g, '  ')
+    .replace(/([.!?])\s+/g, '$1 ')
+    .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
@@ -98,7 +104,7 @@ class VoicePipeline {
 
     this.accumulatedTranscript = '';
     this.transcriptionSilenceTimer = null;
-    this.SILENCE_TIMEOUT_MS = 500;
+    this.SILENCE_TIMEOUT_MS = 850;
 
     this.sarvamSttStream = null;
     this.sarvamTtsStream = null;
@@ -197,7 +203,7 @@ class VoicePipeline {
         if (this.transcriptionSilenceTimer) {
           clearTimeout(this.transcriptionSilenceTimer);
         }
-        this.transcriptionSilenceTimer = setTimeout(() => this._flushRealtimeTranscript(), 500);
+        this.transcriptionSilenceTimer = setTimeout(() => this._flushRealtimeTranscript(), this.SILENCE_TIMEOUT_MS);
       },
       onError: (err) => {
         this._log('error', `Sarvam STT WebSocket error: ${err.message}`);
@@ -471,6 +477,14 @@ class VoicePipeline {
 
     if (this.transcriptionSilenceTimer) {
       clearTimeout(this.transcriptionSilenceTimer);
+    }
+
+    if (
+      this.accumulatedTranscript &&
+      transcript.length < this.accumulatedTranscript.length &&
+      this.accumulatedTranscript.toLowerCase().includes(transcript.toLowerCase())
+    ) {
+      return;
     }
 
     this.accumulatedTranscript = transcript;

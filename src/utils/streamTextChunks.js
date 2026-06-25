@@ -2,14 +2,15 @@
  * Drain speakable phrases from a streaming LLM token buffer for low-latency TTS.
  * Emits on punctuation boundaries and on long clauses without waiting for a full sentence.
  */
-function drainStreamingPhrases(buffer, { minPhraseChars = 6, maxBufferChars = 48 } = {}) {
+function drainStreamingPhrases(buffer, { minPhraseChars = 14, maxBufferChars = 92 } = {}) {
   const phrases = [];
   let remainder = buffer;
 
-  const boundaryPattern = new RegExp(`(.{${minPhraseChars},}?)([.!?,:;])(\\s+)`);
+  const strongBoundaryPattern = new RegExp(`(.{${minPhraseChars},}?)([.!?])(\\s+)`);
+  const softBoundaryPattern = new RegExp(`(.{${minPhraseChars + 10},}?)([,;:])(\\s+)`);
 
   while (true) {
-    const match = remainder.match(boundaryPattern);
+    const match = remainder.match(strongBoundaryPattern) || remainder.match(softBoundaryPattern);
     if (match) {
       const index = match.index + match[1].length + match[2].length;
       const phrase = remainder.substring(0, index).trim();
@@ -19,7 +20,17 @@ function drainStreamingPhrases(buffer, { minPhraseChars = 6, maxBufferChars = 48
     }
 
     if (remainder.length >= maxBufferChars) {
-      const spaceIdx = remainder.lastIndexOf(' ', maxBufferChars - 8);
+      const searchWindow = remainder.substring(0, maxBufferChars);
+      const naturalBreak = Math.max(
+        searchWindow.lastIndexOf(' and '),
+        searchWindow.lastIndexOf(' but '),
+        searchWindow.lastIndexOf(' so '),
+        searchWindow.lastIndexOf(' because '),
+        searchWindow.lastIndexOf(' then ')
+      );
+      const spaceIdx = naturalBreak >= minPhraseChars
+        ? naturalBreak
+        : remainder.lastIndexOf(' ', maxBufferChars - 12);
       if (spaceIdx >= minPhraseChars) {
         phrases.push(remainder.substring(0, spaceIdx).trim());
         remainder = remainder.substring(spaceIdx).trim();
