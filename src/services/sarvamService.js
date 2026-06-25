@@ -110,7 +110,8 @@ class SarvamService {
         `${this.apiBaseUrl}/text-to-speech`,
         {
           inputs: [text],
-          voice: voiceId, // e.g. 'shubh' or category preloaded voices
+          voice: voiceId,
+          speaker: voiceId, // Modern Bulbul v3 speaker field
           language_code: locale,
           model: 'bulbul:v3',
           pace: options.pace !== undefined ? parseFloat(options.pace) : 1.0,
