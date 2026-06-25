@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
-const { authMiddleware, authorizeRoles } = require('../middlewares/auth');
+const { authenticate, isAdmin } = require('../middleware/auth');
 
 // All admin routes should require admin role
-router.use(authMiddleware);
-router.use(authorizeRoles('admin'));
+router.use(authenticate);
+router.use(isAdmin);
 
 // Agent approval routes
 router.get('/agents/pending', adminController.getPendingAgents);

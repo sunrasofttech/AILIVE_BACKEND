@@ -6,9 +6,9 @@ class GeminiMultimodalLiveSession extends EventEmitter {
   constructor({ systemPrompt, voiceName, onAudioOutput, onError, onClose, onTranscription }) {
     super();
     this.apiKey = defaults.gemini.apiKey;
-    // Ensure model has 'models/' prefix
     const rawModel = defaults.gemini.multimodalLiveModel || 'gemini-2.0-flash-exp';
-    this.modelName = rawModel.startsWith('models/') ? rawModel : `models/${rawModel}`;
+    // Do not force or prepend 'models/' prefix for live or custom models
+    this.modelName = rawModel.startsWith('models/') ? rawModel.substring(7) : rawModel;
     
     this.systemPrompt = systemPrompt;
     this.voiceName = voiceName || 'Aoede';

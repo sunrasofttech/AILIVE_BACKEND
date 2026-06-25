@@ -4,7 +4,8 @@ const defaults = require('../config/defaults');
 class AiAnalysisService {
   constructor() {
     this.apiKey = defaults.gemini.apiKey;
-    this.modelName = defaults.gemini.analysisModel;
+    const rawModel = defaults.gemini.analysisModel || 'gemini-3.5-flash';
+    this.modelName = rawModel.startsWith('models/') ? rawModel.substring(7) : rawModel;
   }
 
   /**
@@ -27,7 +28,13 @@ class AiAnalysisService {
     }
 
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this.apiKey}`;
+      let modelPath = this.modelName;
+      if (modelPath.startsWith('tunedModels/')) {
+        // Do not prepend models/ for custom tuned models
+      } else {
+        modelPath = `models/${modelPath}`;
+      }
+      const url = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${this.apiKey}`;
 
       const prompt = `
         Analyze the following voice call transcript between an AI voice agent and a customer.

@@ -20,7 +20,7 @@ class GeminiLiveSession {
    */
   constructor({ systemPrompt, model = defaults.gemini.liveModel, onResponseText, onError, onClose }) {
     this.systemPrompt = systemPrompt;
-    this.modelName = model;
+    this.modelName = model.startsWith('models/') ? model.substring(7) : model;
     this.onResponseText = onResponseText;
     this.onError = onError;
     this.onClose = onClose;
@@ -110,7 +110,13 @@ class GeminiLiveSession {
         },
       };
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this.apiKey}`;
+      let modelPath = this.modelName;
+      if (modelPath.startsWith('tunedModels/')) {
+        // Do not prepend models/ for custom tuned models
+      } else {
+        modelPath = `models/${modelPath}`;
+      }
+      const url = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${this.apiKey}`;
 
       let response;
       let retries = 3;
