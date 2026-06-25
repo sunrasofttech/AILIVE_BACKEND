@@ -142,7 +142,7 @@ class SarvamLiveSession {
         model: this.modelName,
         messages: messages,
         temperature: 0.55,
-        max_tokens: 140,
+        max_tokens: 220,
         stream: true,
       };
 

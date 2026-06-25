@@ -137,7 +137,7 @@ class GeminiLiveSession {
         generationConfig: {
           temperature: 0.55,
           topP: 0.9,
-          maxOutputTokens: 140,
+          maxOutputTokens: 220,
         },
       };
 

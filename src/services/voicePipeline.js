@@ -66,6 +66,42 @@ function preprocessForTTS(text) {
     .trim();
 }
 
+function normalizeTranscript(text) {
+  return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function mergeTranscript(previous, next) {
+  const prev = normalizeTranscript(previous);
+  const incoming = normalizeTranscript(next);
+  if (!prev) return incoming;
+  if (!incoming) return prev;
+
+  const prevLower = prev.toLowerCase();
+  const incomingLower = incoming.toLowerCase();
+  if (incomingLower.startsWith(prevLower)) return incoming;
+  if (prevLower.includes(incomingLower)) return prev;
+
+  const prevWords = prev.split(' ');
+  const incomingWords = incoming.split(' ');
+  const maxOverlap = Math.min(prevWords.length, incomingWords.length);
+
+  for (let size = maxOverlap; size > 0; size--) {
+    const prevTail = prevWords.slice(-size).join(' ').toLowerCase();
+    const incomingHead = incomingWords.slice(0, size).join(' ').toLowerCase();
+    if (prevTail === incomingHead) {
+      return `${prevWords.join(' ')} ${incomingWords.slice(size).join(' ')}`.trim();
+    }
+  }
+
+  return `${prev} ${incoming}`;
+}
+
+function isSubstantialInterruption(text) {
+  const normalized = normalizeTranscript(text);
+  if (normalized.length >= 8) return true;
+  return normalized.split(' ').filter(Boolean).length >= 2;
+}
+
 /**
  * Compute actual audio duration in milliseconds from a WAV buffer.
  */
@@ -104,7 +140,7 @@ class VoicePipeline {
 
     this.accumulatedTranscript = '';
     this.transcriptionSilenceTimer = null;
-    this.SILENCE_TIMEOUT_MS = 850;
+    this.SILENCE_TIMEOUT_MS = 1050;
 
     this.sarvamSttStream = null;
     this.sarvamTtsStream = null;
@@ -187,7 +223,7 @@ class VoicePipeline {
     const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
 
     this.sarvamSttStream = new SarvamSTTStream({
-      languageCode: 'unknown',
+      languageCode: language,
       onTranscript: (transcript, detectedLanguageCode) => {
         this._log('info', `[STT partial] ${transcript} (detected: ${detectedLanguageCode})`);
         if (detectedLanguageCode && detectedLanguageCode !== 'unknown') {
@@ -427,7 +463,7 @@ class VoicePipeline {
         const timeout = setTimeout(() => {
           this._log('warn', `TTS timeout for chunk "${text.substring(0, 40)}..."`);
           finish();
-        }, 15000);
+        }, 30000);
 
         this.sarvamTtsStream.sendText(processedText, () => {
           clearTimeout(timeout);
@@ -479,15 +515,7 @@ class VoicePipeline {
       clearTimeout(this.transcriptionSilenceTimer);
     }
 
-    if (
-      this.accumulatedTranscript &&
-      transcript.length < this.accumulatedTranscript.length &&
-      this.accumulatedTranscript.toLowerCase().includes(transcript.toLowerCase())
-    ) {
-      return;
-    }
-
-    this.accumulatedTranscript = transcript;
+    this.accumulatedTranscript = mergeTranscript(this.accumulatedTranscript, transcript);
 
     this.transcriptionSilenceTimer = setTimeout(() => {
       this._flushRealtimeTranscript();
@@ -513,6 +541,11 @@ class VoicePipeline {
     if (this.transcriptionSilenceTimer) {
       clearTimeout(this.transcriptionSilenceTimer);
       this.transcriptionSilenceTimer = null;
+    }
+
+    if (this.isAgentSpeaking && !isSubstantialInterruption(finalTranscript)) {
+      this._log('info', `[Interruption Ignored] Too short while agent speaking: "${finalTranscript}"`);
+      return;
     }
 
     if (this.isAgentSpeaking) {
