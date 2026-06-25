@@ -1,6 +1,7 @@
 const { createAgentSchema } = require('./src/validators/agent');
 const { SarvamLiveSession } = require('./src/services/sarvamLiveService');
 const { GeminiLiveSession } = require('./src/services/geminiLiveService');
+const { SarvamSTTStream, SarvamTTSStream } = require('./src/services/sarvamSocketService');
 const VoicePipeline = require('./src/services/voicePipeline');
 const defaults = require('./src/config/defaults');
 
@@ -193,12 +194,79 @@ async function testRealGeminiLiveSession() {
   });
 }
 
+async function testRealSarvamWebSockets() {
+  console.log('\n--- 3.7 Testing Sarvam STT & TTS WebSockets (Mock & Real checks) ---');
+  
+  // 1. STT WebSocket Mock check
+  console.log('Testing Mock STT WebSocket...');
+  const sttMock = new SarvamSTTStream({
+    languageCode: 'en-IN',
+    onTranscript: (transcript) => {
+      console.log(` > [Mock STT Transcript]: "${transcript}"`);
+    },
+  });
+  sttMock.connect();
+  sttMock.sendAudio(Buffer.alloc(1000));
+  await new Promise(res => setTimeout(res, 1000));
+  sttMock.close();
+
+  // 2. TTS WebSocket Mock check
+  console.log('Testing Mock TTS WebSocket...');
+  await new Promise((resolve) => {
+    const ttsMock = new SarvamTTSStream({
+      languageCode: 'en-IN',
+      voiceId: 'shubh',
+      onAudioChunk: (buf) => {
+        console.log(` > [Mock TTS Audio Chunk]: Received ${buf.length} bytes`);
+      },
+      onDone: () => {
+        console.log(' > [Mock TTS Done]');
+        ttsMock.close();
+        resolve();
+      },
+    });
+    ttsMock.connect();
+    ttsMock.sendText('Hello, this is a websocket streaming test.');
+  });
+
+  // 3. Real WSS check if API key exists
+  const apiKey = defaults.sarvam.apiKey;
+  if (!apiKey || apiKey === 'your_sarvam_api_key') {
+    console.log('⚠️ Skipping Real STT/TTS WebSocket tests: No valid SARVAM_API_KEY found in .env');
+    return;
+  }
+
+  console.log('Testing Real TTS WebSocket (streamed)...');
+  await new Promise((resolve) => {
+    const ttsReal = new SarvamTTSStream({
+      languageCode: 'en-IN',
+      voiceId: 'shubh',
+      onAudioChunk: (buf) => {
+        console.log(` > [Real TTS Audio Chunk]: Received ${buf.length} bytes`);
+      },
+      onDone: () => {
+        console.log(' > [Real TTS Done]');
+        ttsReal.close();
+        resolve();
+      },
+      onError: (err) => {
+        console.error('❌ [Real TTS Error]:', err.message);
+        ttsReal.close();
+        resolve();
+      }
+    });
+    ttsReal.connect();
+    ttsReal.sendText('Hello.');
+  });
+}
+
 async function main() {
   try {
     await testJoiValidation();
     await testMockSarvamLiveSession();
     await testRealSarvamLiveSession();
     await testRealGeminiLiveSession();
+    await testRealSarvamWebSockets();
     await testVoicePipelineIntegration();
     console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! 🎉');
   } catch (err) {
