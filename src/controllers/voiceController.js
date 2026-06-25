@@ -18,14 +18,22 @@ class VoiceController {
         return ResponseBuilder.error(res, 'User not found', 404);
       }
 
+      const { provider } = req.query;
+
+      const whereClause = {
+        [Op.or]: [
+          { userId: req.user.id },
+          { isCustom: false },
+        ],
+      };
+
+      if (provider) {
+        whereClause.provider = provider;
+      }
+
       // Retrieve default/preloaded voices and custom voices created by this user
       const voices = await Voice.findAll({
-        where: {
-          [Op.or]: [
-            { userId: req.user.id },
-            { isCustom: false },
-          ],
-        },
+        where: whereClause,
       });
 
       return ResponseBuilder.success(res, voices, 'Voices retrieved successfully');
