@@ -126,10 +126,12 @@ class VoicePipeline {
     this.MIN_BUFFER_BYTES = 1600;
 
     this.isConnected = true;
+    this.activeProvider = this.agent.aiProvider === 'geminilive' ? 'geminilive' : 'custom';
+    this._isSwitchingProvider = false;
 
     this._log('info', `Initializing VoicePipeline with AI Provider: ${this.agent.aiProvider}`);
 
-    if (this.agent.aiProvider === 'geminilive') {
+    if (this.activeProvider === 'geminilive') {
       this.geminiSession = new GeminiMultimodalLiveSession({
         systemPrompt: this.agent.systemPrompt,
         voiceName: this.agent.voice?.voiceId || 'Puck',
@@ -157,55 +159,26 @@ class VoicePipeline {
           this._log('error', `Gemini Multimodal Live connection error: ${err.message}`);
           if (this.onError) this.onError(err);
         },
-        onClose: () => {
+        onClose: (closeInfo = {}) => {
           this._log('info', 'Gemini Multimodal Live session closed');
+          if (!this.isConnected || this._isSwitchingProvider || this.activeProvider !== 'geminilive') return;
+
+          // If live session cannot start (unsupported/invalid model or bidi unavailable),
+          // fall back to the custom STT->Gemini REST->TTS flow instead of dropping the call.
+          if (!closeInfo.wasSetupComplete) {
+            this._fallbackToCustomProvider(`code=${closeInfo.code}, reason=${closeInfo.reason || 'unknown'}`);
+          }
         },
       });
     } else {
-      this.geminiSession = new GeminiLiveSession({
-        systemPrompt: this.agent.systemPrompt,
-        model: defaults.gemini.liveModel,
-        onResponseText: async (text) => {
-          try {
-            this._log('info', `Agent responded: ${text}`);
-            if (this.onAgentTranscription) this.onAgentTranscription(text);
-
-            const ttsGeneration = ++this._ttsGeneration;
-
-            // Mark agent as speaking immediately so interruption logic takes effect
-            // even before audio is synthesized.
-            this._setAgentSpeaking(3000); // Conservative minimum while we process
-
-            const cleanText = stripMarkdown(text);
-            if (!cleanText) return;
-
-            const sentences = splitIntoSentences(cleanText);
-
-            for (const sentence of sentences) {
-              this._ttsQueue = this._ttsQueue.then(() =>
-                this._synthesizeAndPlay(sentence, ttsGeneration)
-              );
-            }
-          } catch (err) {
-            this._log('error', `TTS pipeline failure: ${err.message}`);
-            if (this.onError) this.onError(err);
-          }
-        },
-        onError: (err) => {
-          this._log('error', `Gemini Live connection error: ${err.message}`);
-          if (this.onError) this.onError(err);
-        },
-        onClose: () => {
-          this._log('info', 'Gemini session closed');
-        },
-      });
+      this.geminiSession = this._createCustomGeminiSession();
     }
 
     let hasPreRecordedFirstMessage = false;
     let preRecordedFilePath = null;
 
     // Pre-recorded first message uses Sarvam TTS — only for the custom (STT+REST+TTS) provider.
-    if (this.agent.aiProvider !== 'geminilive' && this.agent.firstMessageAudioPath) {
+    if (this.activeProvider !== 'geminilive' && this.agent.firstMessageAudioPath) {
       preRecordedFilePath = path.resolve(process.cwd(), this.agent.firstMessageAudioPath);
       if (fs.existsSync(preRecordedFilePath)) {
         hasPreRecordedFirstMessage = true;
@@ -226,6 +199,76 @@ class VoicePipeline {
     this.isAgentSpeaking = false;
     if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
     if (this.onClearAudio) this.onClearAudio();
+  }
+
+  _createCustomGeminiSession() {
+    return new GeminiLiveSession({
+      systemPrompt: this.agent.systemPrompt,
+      model: defaults.gemini.liveModel,
+      onResponseText: async (text) => {
+        try {
+          this._log('info', `Agent responded: ${text}`);
+          if (this.onAgentTranscription) this.onAgentTranscription(text);
+
+          const ttsGeneration = ++this._ttsGeneration;
+
+          // Mark agent as speaking immediately so interruption logic takes effect
+          // even before audio is synthesized.
+          this._setAgentSpeaking(3000); // Conservative minimum while we process
+
+          const cleanText = stripMarkdown(text);
+          if (!cleanText) return;
+
+          const sentences = splitIntoSentences(cleanText);
+
+          for (const sentence of sentences) {
+            this._ttsQueue = this._ttsQueue.then(() =>
+              this._synthesizeAndPlay(sentence, ttsGeneration)
+            );
+          }
+        } catch (err) {
+          this._log('error', `TTS pipeline failure: ${err.message}`);
+          if (this.onError) this.onError(err);
+        }
+      },
+      onError: (err) => {
+        this._log('error', `Gemini Live connection error: ${err.message}`);
+        if (this.onError) this.onError(err);
+      },
+      onClose: () => {
+        this._log('info', 'Gemini session closed');
+      },
+    });
+  }
+
+  _fallbackToCustomProvider(reason) {
+    this._isSwitchingProvider = true;
+    this._log('info', `[Provider Fallback] Gemini Live unavailable (${reason}). Switching to custom pipeline.`);
+
+    try {
+      if (this.geminiSession && typeof this.geminiSession.close === 'function') {
+        this.geminiSession.close();
+      }
+    } catch (closeErr) {
+      this._log('error', `[Provider Fallback] Failed closing live session: ${closeErr.message}`);
+    }
+
+    this.activeProvider = 'custom';
+    this.geminiSession = this._createCustomGeminiSession();
+
+    let hasPreRecordedFirstMessage = false;
+    let preRecordedFilePath = null;
+    if (this.agent.firstMessageAudioPath) {
+      preRecordedFilePath = path.resolve(process.cwd(), this.agent.firstMessageAudioPath);
+      hasPreRecordedFirstMessage = fs.existsSync(preRecordedFilePath);
+    }
+
+    this.geminiSession.connect(hasPreRecordedFirstMessage, this.agent.firstMessage);
+    if (hasPreRecordedFirstMessage) {
+      setImmediate(() => this._playPreRecordedFirstMessage(preRecordedFilePath));
+    }
+
+    this._isSwitchingProvider = false;
   }
 
   /**
@@ -321,7 +364,7 @@ class VoicePipeline {
   async handleAudioInput(pcmBuffer) {
     if (!this.isConnected) return;
 
-    if (this.agent.aiProvider === 'geminilive') {
+    if (this.activeProvider === 'geminilive') {
       // Interrupt handling
       if (!this.agent.allowInterruption && this.isAgentSpeaking) {
          // Do not send customer audio to Gemini if interruption is disabled and agent is talking
@@ -349,7 +392,7 @@ class VoicePipeline {
    * Transcribe buffered audio and send to Gemini.
    */
   async flushAudioBuffer() {
-    if (this.agent.aiProvider === 'geminilive') return; // Handled natively in real-time
+    if (this.activeProvider === 'geminilive') return; // Handled natively in real-time
 
     if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
     if (this.maxDurationTimer) { clearTimeout(this.maxDurationTimer); this.maxDurationTimer = null; }

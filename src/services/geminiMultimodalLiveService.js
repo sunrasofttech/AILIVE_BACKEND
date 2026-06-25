@@ -6,7 +6,7 @@ class GeminiMultimodalLiveSession extends EventEmitter {
   constructor({ systemPrompt, voiceName, allowInterruption = true, onAudioOutput, onError, onClose, onTranscription, onInterrupted }) {
     super();
     this.apiKey = defaults.gemini.apiKey;
-    const rawModel = defaults.gemini.multimodalLiveModel || 'gemini-2.0-flash';
+    const rawModel = defaults.gemini.multimodalLiveModel || 'gemini-3.1-flash-live-preview';
     this.modelName = this._formatModelName(rawModel);
 
     this.systemPrompt = systemPrompt;
@@ -53,10 +53,15 @@ class GeminiMultimodalLiveSession extends EventEmitter {
     });
 
     this.ws.on('close', (code, reason) => {
+      const closeInfo = {
+        code,
+        reason: reason ? reason.toString() : 'None',
+        wasSetupComplete: this.isSetupComplete,
+      };
       this.isConnected = false;
       this.isSetupComplete = false;
-      console.log(`[Gemini Multimodal Live] WS Closed: Code=${code}, Reason=${reason ? reason.toString() : 'None'}`);
-      if (this.onClose) this.onClose();
+      console.log(`[Gemini Multimodal Live] WS Closed: Code=${code}, Reason=${closeInfo.reason}`);
+      if (this.onClose) this.onClose(closeInfo);
     });
   }
 
