@@ -190,7 +190,10 @@ class VoicePipeline {
         if (this.sarvamSttStream) {
           this.sarvamSttStream.flush();
         }
-        setTimeout(() => this._flushRealtimeTranscript(), 100);
+        if (this.transcriptionSilenceTimer) {
+          clearTimeout(this.transcriptionSilenceTimer);
+        }
+        this.transcriptionSilenceTimer = setTimeout(() => this._flushRealtimeTranscript(), 500);
       },
       onError: (err) => {
         this._log('error', `Sarvam STT WebSocket error: ${err.message}`);
