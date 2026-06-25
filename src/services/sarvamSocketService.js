@@ -56,6 +56,7 @@ class SarvamSTTStream {
     this.pcmBatchBuffer = [];
     this.pcmBatchBytes = 0;
     this.PCM_BATCH_TARGET_BYTES = 3200;
+    this.hasSentFirstChunk = false;
 
     // Local buffering for mock mode
     this.mockTimer = null;
@@ -69,6 +70,7 @@ class SarvamSTTStream {
   }
 
   connect() {
+    this.hasSentFirstChunk = false;
     if (this.isMock) {
       console.warn('[Mock Sarvam STT WSS] Key missing. Initializing Mock STT stream.');
       this.isConnected = true;
@@ -189,11 +191,19 @@ class SarvamSTTStream {
   _sendAudioPayload(pcmBuffer) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
+    let wavBuffer;
+    if (!this.hasSentFirstChunk) {
+      wavBuffer = addWavHeader(pcmBuffer, 16000);
+      this.hasSentFirstChunk = true;
+    } else {
+      wavBuffer = pcmBuffer;
+    }
+
     const payload = JSON.stringify({
       audio: {
-        data: pcmBuffer.toString('base64'),
+        data: wavBuffer.toString('base64'),
         sample_rate: 16000,
-        encoding: 'pcm_s16le',
+        encoding: 'audio/wav',
       },
     });
     this.ws.send(payload);
@@ -211,6 +221,7 @@ class SarvamSTTStream {
 
   close() {
     this.isConnected = false;
+    this.hasSentFirstChunk = false;
     this.pendingAudioChunks = [];
     this.pcmBatchBuffer = [];
     this.pcmBatchBytes = 0;
