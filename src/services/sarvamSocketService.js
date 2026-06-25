@@ -1,6 +1,20 @@
 const WebSocket = require('ws');
 const defaults = require('../config/defaults');
 
+const SARVAM_LOCALE_MAP = {
+  'en': 'en-IN',
+  'hi': 'hi-IN',
+  'bn': 'bn-IN',
+  'ta': 'ta-IN',
+  'te': 'te-IN',
+  'gu': 'gu-IN',
+  'kn': 'kn-IN',
+  'ml': 'ml-IN',
+  'mr': 'mr-IN',
+  'pa': 'pa-IN',
+  'od': 'od-IN',
+};
+
 function addWavHeader(pcmBuffer, sampleRate = 16000) {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
@@ -30,7 +44,7 @@ class SarvamSTTStream {
   constructor({ languageCode = defaults.sarvam.defaultLanguageCode, onTranscript, onError }) {
     this.apiKey = defaults.sarvam.apiKey;
     this.apiBaseUrl = defaults.sarvam.apiBaseUrl || 'https://api.sarvam.ai';
-    this.languageCode = languageCode || 'en-IN';
+    this.languageCode = SARVAM_LOCALE_MAP[languageCode] || languageCode || 'en-IN';
     this.onTranscript = onTranscript;
     this.onError = onError;
 
@@ -155,7 +169,7 @@ class SarvamTTSStream {
   constructor({ languageCode = defaults.sarvam.defaultLanguageCode, voiceId = defaults.sarvam.defaultVoiceId, onAudioChunk, onDone, onError }) {
     this.apiKey = defaults.sarvam.apiKey;
     this.apiBaseUrl = defaults.sarvam.apiBaseUrl || 'https://api.sarvam.ai';
-    this.languageCode = languageCode || 'en-IN';
+    this.languageCode = SARVAM_LOCALE_MAP[languageCode] || languageCode || 'en-IN';
     this.voiceId = voiceId || 'amrit';
     this.onAudioChunk = onAudioChunk;
     this.onDone = onDone;
