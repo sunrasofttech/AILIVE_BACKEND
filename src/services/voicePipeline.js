@@ -1,7 +1,7 @@
 const { GeminiLiveSession } = require('./geminiLiveService');
 const { GeminiMultimodalLiveSession } = require('./geminiMultimodalLiveService');
 const { SarvamLiveSession } = require('./sarvamLiveService');
-const { SarvamSTTStream, SarvamTTSStream } = require('./sarvamSocketService');
+const { SarvamSTTStream, SarvamTTSStream, SARVAM_LOCALE_MAP } = require('./sarvamSocketService');
 const defaults = require('../config/defaults');
 const fs = require('fs');
 const path = require('path');
@@ -102,6 +102,7 @@ class VoicePipeline {
 
     this.sarvamSttStream = null;
     this.sarvamTtsStream = null;
+    this.detectedLanguageCode = null;
 
     this.isConnected = true;
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
@@ -180,9 +181,12 @@ class VoicePipeline {
     const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
 
     this.sarvamSttStream = new SarvamSTTStream({
-      languageCode: language,
-      onTranscript: (transcript) => {
-        this._log('info', `[STT partial] ${transcript}`);
+      languageCode: 'unknown',
+      onTranscript: (transcript, detectedLanguageCode) => {
+        this._log('info', `[STT partial] ${transcript} (detected: ${detectedLanguageCode})`);
+        if (detectedLanguageCode && detectedLanguageCode !== 'unknown') {
+          this._updateTtsLanguage(detectedLanguageCode);
+        }
         this._handleRealtimeTranscript(transcript);
       },
       onSpeechEnd: () => {
@@ -204,6 +208,44 @@ class VoicePipeline {
     this.sarvamTtsStream = new SarvamTTSStream({
       languageCode: language,
       voiceId: voiceName,
+      pace: this.agent.pace,
+      temperature: this.agent.temperature,
+      onAudioChunk: (audioBuffer) => {
+        this._playTtsAudioChunk(audioBuffer, this._activeTtsGeneration);
+      },
+      onError: (err) => {
+        this._log('error', `Sarvam TTS WebSocket error: ${err.message}`);
+      },
+    });
+    this.sarvamTtsStream.connect();
+  }
+
+  _updateTtsLanguage(newLanguageCode) {
+    if (!this.isConnected) return;
+
+    const targetTtsLanguage = SARVAM_LOCALE_MAP[newLanguageCode] || newLanguageCode || 'en-IN';
+    const currentTtsLanguage = this.sarvamTtsStream ? this.sarvamTtsStream.languageCode : null;
+
+    if (currentTtsLanguage === targetTtsLanguage) {
+      return;
+    }
+
+    this._log('info', `[TTS Language Switch] Detected customer language switch. Re-initializing TTS WebSocket from ${currentTtsLanguage} to ${targetTtsLanguage}`);
+
+    if (this.sarvamTtsStream) {
+      try {
+        this.sarvamTtsStream.close();
+      } catch (err) {
+        // ignore close error
+      }
+    }
+
+    const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
+    this.sarvamTtsStream = new SarvamTTSStream({
+      languageCode: targetTtsLanguage,
+      voiceId: voiceName,
+      pace: this.agent.pace,
+      temperature: this.agent.temperature,
       onAudioChunk: (audioBuffer) => {
         this._playTtsAudioChunk(audioBuffer, this._activeTtsGeneration);
       },

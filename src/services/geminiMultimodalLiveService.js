@@ -2,6 +2,15 @@ const WebSocket = require('ws');
 const defaults = require('../config/defaults');
 const EventEmitter = require('events');
 
+const CONVERSATIONAL_SYSTEM_INSTRUCTION = `IMPORTANT: You are a voice AI agent on a phone call.
+Respond in plain conversational text only.
+Never use markdown formatting like bullet points, bolding (**), asterisks (*), headings (#), or lists.
+Speak in a warm, natural, friendly tone, as if talking to a friend on the phone.
+Keep sentences relatively short, simple, and easy to pronounce.
+Use natural contractions (e.g. "don't", "I'll", "we're", "can't") and natural conversational rhythms.
+Avoid dry, formal, or overly-robotic language.
+If the customer speaks in Hindi or a mix of Hindi and English, match their style and reply in a natural, colloquial conversational manner.`;
+
 class GeminiMultimodalLiveSession extends EventEmitter {
   constructor({ systemPrompt, voiceName, allowInterruption = true, onAudioOutput, onError, onClose, onTranscription, onInterrupted }) {
     super();
@@ -87,7 +96,7 @@ class GeminiMultimodalLiveSession extends EventEmitter {
           },
         },
         systemInstruction: {
-          parts: [{ text: this.systemPrompt || 'You are a helpful AI assistant on a phone call.' }],
+          parts: [{ text: `${CONVERSATIONAL_SYSTEM_INSTRUCTION}\n\n${this.systemPrompt || 'You are a helpful AI assistant on a phone call.'}` }],
         },
         realtimeInputConfig: {
           activityHandling: this.allowInterruption

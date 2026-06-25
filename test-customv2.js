@@ -135,6 +135,26 @@ async function testVoicePipelineIntegration() {
   // Force mock mode on the instantiated session
   pipeline.geminiSession.apiKey = 'your_sarvam_api_key';
 
+  // Verify STT was initialized with 'unknown'
+  if (pipeline.sarvamSttStream.languageCode !== 'unknown') {
+    throw new Error(`Expected STT languageCode to be 'unknown', got ${pipeline.sarvamSttStream.languageCode}`);
+  }
+  console.log('✅ Verified STT stream initialized with languageCode "unknown"');
+
+  // Trigger language detection callback simulating user speaking Hindi
+  console.log('Simulating STT language detection: "hi-IN"');
+  const originalTtsStream = pipeline.sarvamTtsStream;
+  pipeline.sarvamSttStream.onTranscript('कॉल क्यों की है', 'hi-IN');
+
+  // Check if TTS stream was re-created with hi-IN
+  if (pipeline.sarvamTtsStream === originalTtsStream) {
+    throw new Error('Expected TTS stream to be re-created upon language detection');
+  }
+  if (pipeline.sarvamTtsStream.languageCode !== 'hi-IN') {
+    throw new Error(`Expected new TTS stream languageCode to be 'hi-IN', got ${pipeline.sarvamTtsStream.languageCode}`);
+  }
+  console.log('✅ Verified dynamic TTS stream re-creation and switch to "hi-IN" successful');
+
   // Wait for greeting to play and clean up
   await new Promise((res) => setTimeout(res, 3000));
   

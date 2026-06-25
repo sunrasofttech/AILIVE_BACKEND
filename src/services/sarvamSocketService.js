@@ -108,7 +108,7 @@ class SarvamSTTStream {
 
           if (parsed.type === 'data' && parsed.data?.transcript) {
             if (this.onTranscript) {
-              this.onTranscript(parsed.data.transcript);
+              this.onTranscript(parsed.data.transcript, parsed.data.language_code);
             }
             return;
           }
@@ -228,6 +228,8 @@ class SarvamSTTStream {
     if (this.mockTimer) clearTimeout(this.mockTimer);
     if (this.ws) {
       try {
+        this.ws.removeAllListeners('error');
+        this.ws.on('error', () => {});
         this.ws.close();
       } catch (err) {
         // Ignore close errors
@@ -247,11 +249,13 @@ class SarvamTTSStream {
    * @param {function} params.onDone - Callback when streaming is completed
    * @param {function} params.onError - Callback on error
    */
-  constructor({ languageCode = defaults.sarvam.defaultLanguageCode, voiceId = defaults.sarvam.defaultVoiceId, onAudioChunk, onDone, onError }) {
+  constructor({ languageCode = defaults.sarvam.defaultLanguageCode, voiceId = defaults.sarvam.defaultVoiceId, pace = 1.0, temperature = 0.6, onAudioChunk, onDone, onError }) {
     this.apiKey = defaults.sarvam.apiKey;
     this.apiBaseUrl = defaults.sarvam.apiBaseUrl || 'https://api.sarvam.ai';
     this.languageCode = SARVAM_LOCALE_MAP[languageCode] || languageCode || 'en-IN';
     this.voiceId = voiceId || 'amrit';
+    this.pace = pace;
+    this.temperature = temperature;
     this.onAudioChunk = onAudioChunk;
     this.onDone = onDone;
     this.onError = onError;
@@ -295,6 +299,8 @@ class SarvamTTSStream {
             send_completion_event: true,
             output_audio_codec: 'linear16',
             speech_sample_rate: 16000,
+            pace: this.pace !== undefined ? parseFloat(this.pace) : 1.0,
+            temperature: this.temperature !== undefined ? parseFloat(this.temperature) : 0.6,
           },
         });
         this.ws.send(configMessage);
@@ -406,6 +412,8 @@ class SarvamTTSStream {
     this.isConnected = false;
     if (this.ws) {
       try {
+        this.ws.removeAllListeners('error');
+        this.ws.on('error', () => {});
         this.ws.close();
       } catch (err) {
         // Ignore close errors
@@ -418,4 +426,5 @@ class SarvamTTSStream {
 module.exports = {
   SarvamSTTStream,
   SarvamTTSStream,
+  SARVAM_LOCALE_MAP,
 };

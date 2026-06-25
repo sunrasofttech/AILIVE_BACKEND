@@ -2,6 +2,15 @@ const axios = require('axios');
 const defaults = require('../config/defaults');
 const { drainStreamingPhrases } = require('../utils/streamTextChunks');
 
+const CONVERSATIONAL_SYSTEM_INSTRUCTION = `IMPORTANT: You are a voice AI agent on a phone call.
+Respond in plain conversational text only.
+Never use markdown formatting like bullet points, bolding (**), asterisks (*), headings (#), or lists.
+Speak in a warm, natural, friendly tone, as if talking to a friend on the phone.
+Keep sentences relatively short, simple, and easy to pronounce.
+Use natural contractions (e.g. "don't", "I'll", "we're", "can't") and natural conversational rhythms.
+Avoid dry, formal, or overly-robotic language.
+If the customer speaks in Hindi or a mix of Hindi and English, match their style and reply in a natural, colloquial conversational manner.`;
+
 class SarvamLiveSession {
   /**
    * Represents an active Sarvam conversation session using the REST chat completions API with streaming.
@@ -132,7 +141,7 @@ class SarvamLiveSession {
       const messages = [
         {
           role: 'system',
-          content: `IMPORTANT: You are a voice AI agent on a phone call. Always respond in plain conversational text only. Never use markdown formatting such as bullet points, bold text (**), asterisks (*), headings (#), or numbered lists. Speak naturally as if talking on the phone.\n\n${this.systemPrompt}`,
+          content: `${CONVERSATIONAL_SYSTEM_INSTRUCTION}\n\n${this.systemPrompt}`,
         },
         ...this.conversationHistory,
       ];
