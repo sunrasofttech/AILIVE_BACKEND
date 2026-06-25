@@ -209,6 +209,9 @@ class SarvamTTSStream {
           data: {
             target_language_code: this.languageCode,
             speaker: this.voiceId,
+            send_completion_event: true,
+            output_audio_codec: 'linear16',
+            speech_sample_rate: 16000,
           },
         });
         this.ws.send(configMessage);
