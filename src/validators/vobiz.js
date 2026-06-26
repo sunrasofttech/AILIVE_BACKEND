@@ -11,11 +11,13 @@ const addNumberSchema = Joi.object({
     'string.pattern.base': 'Please enter a valid international phone number (e.g. +1234567890)',
   }),
   status: Joi.string().valid('active', 'inactive').default('active'),
+  agentId: Joi.string().uuid().optional().allow(null),
   providerData: Joi.object().optional(),
 });
 
 const updateNumberSchema = Joi.object({
   status: Joi.string().valid('active', 'inactive').optional(),
+  agentId: Joi.string().uuid().optional().allow(null),
   providerData: Joi.object().optional(),
 });
 

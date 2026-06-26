@@ -28,6 +28,11 @@ VobizNumber.init(
       allowNull: true,
       field: 'provider_data',
     },
+    agentId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: 'agent_id',
+    },
   },
   {
     sequelize,

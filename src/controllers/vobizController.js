@@ -1,9 +1,11 @@
-const { VobizAccount, VobizNumber, User } = require('../models');
+const { VobizAccount, VobizNumber, User, Agent, Customer, CallSession, CallLog } = require('../models');
+const { Op } = require('sequelize');
 const ResponseBuilder = require('../utils/response');
 const { connectAccountSchema, addNumberSchema, updateNumberSchema, buyNumberSchema } = require('../validators/vobiz');
 const { encrypt, decrypt } = require('../utils/crypto');
 const vobizService = require('../services/vobizService');
 const defaults = require('../config/defaults');
+const crypto = require('crypto');
 class VobizController {
   /**
    * Webhook invoked by VoBiz when the call is answered.
@@ -12,12 +14,87 @@ class VobizController {
   async answerCallWebhook(req, res, next) {
     try {
       const { token } = req.query;
-      if (!token) {
-        return res.status(400).send('Missing token');
+
+      // Outbound call flow: token already generated and passed as query parameter
+      if (token) {
+        const streamUrl = `wss://${defaults.ws.host}/ws/vobiz?token=${token}`;
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">${streamUrl}</Stream>
+    <Wait length="3600" />
+</Response>`;
+
+        res.set('Content-Type', 'text/xml');
+        return res.send(xml);
       }
 
-      const streamUrl = `wss://${defaults.ws.host}/ws/vobiz?token=${token}`;
+      // Inbound call flow: resolve by dialed number (To) and caller number (From)
+      const toNum = req.body.To || req.query.To || req.body.to || req.query.to;
+      const fromNum = req.body.From || req.query.From || req.body.from || req.query.from;
+
+      if (!toNum || !fromNum) {
+        console.error('VoBiz Inbound call webhook missing To or From parameter:', { query: req.query, body: req.body });
+        return res.status(400).send('Missing To or From parameter');
+      }
+
+      const cleanToNum = toNum.startsWith('+') ? toNum.substring(1) : toNum;
       
+      // Look up the registered VobizNumber record
+      const vobizNumber = await VobizNumber.findOne({
+        where: {
+          number: {
+            [Op.in]: [toNum, cleanToNum, `+${cleanToNum}`]
+          },
+          status: 'active'
+        },
+        include: [{ model: Agent, as: 'agent' }]
+      });
+
+      if (!vobizNumber || !vobizNumber.agentId || !vobizNumber.agent) {
+        console.warn(`No active agent configured for VoBiz inbound number: ${toNum}`);
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak voice="WOMAN" language="en-US">This number is not configured to receive calls at this time.</Speak>
+    <Hangup/>
+</Response>`;
+        res.set('Content-Type', 'text/xml');
+        return res.send(xml);
+      }
+
+      // Find or register customer record for caller
+      let customer = await Customer.findOne({
+        where: {
+          userId: vobizNumber.userId,
+          mobile: fromNum
+        }
+      });
+
+      if (!customer) {
+        customer = await Customer.create({
+          userId: vobizNumber.userId,
+          mobile: fromNum,
+          name: 'Inbound Caller'
+        });
+      }
+
+      // Generate a new WebSocket session token for this call
+      const wsToken = crypto.randomBytes(32).toString('hex');
+      const session = await CallSession.create({
+        userId: vobizNumber.userId,
+        agentId: vobizNumber.agentId,
+        vobizNumberId: vobizNumber.id,
+        customerId: customer.id,
+        wsSessionToken: wsToken,
+        status: 'initiated',
+      });
+
+      await CallLog.create({
+        callSessionId: session.id,
+        logLevel: 'info',
+        message: `Inbound call from ${fromNum} to ${toNum} answered and routed to Agent: ${vobizNumber.agent.name}`,
+      });
+
+      const streamUrl = `wss://${defaults.ws.host}/ws/vobiz?token=${wsToken}`;
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">${streamUrl}</Stream>
@@ -118,7 +195,7 @@ class VobizController {
         return ResponseBuilder.error(res, error.details[0].message, 400);
       }
 
-      const { number, status, providerData } = value;
+      const { number, status, providerData, agentId } = value;
 
       // Verify if number already exists under this merchant
       const existing = await VobizNumber.findOne({
@@ -128,10 +205,19 @@ class VobizController {
         return ResponseBuilder.error(res, 'This phone number is already registered under your account', 400);
       }
 
+      // Verify if agent exists under this merchant
+      if (agentId) {
+        const agent = await Agent.findOne({ where: { id: agentId, userId: req.user.id } });
+        if (!agent) {
+          return ResponseBuilder.error(res, 'Target Agent not found or not active under your account', 404);
+        }
+      }
+
       const vobizNumber = await VobizNumber.create({
         userId: req.user.id,
         number,
         status,
+        agentId,
         providerData,
       });
 
@@ -159,10 +245,19 @@ class VobizController {
         return ResponseBuilder.error(res, 'VoBiz number record not found', 404);
       }
 
-      const { status, providerData } = value;
+      const { status, providerData, agentId } = value;
+
+      // Verify if agent exists under this merchant
+      if (agentId) {
+        const agent = await Agent.findOne({ where: { id: agentId, userId: req.user.id } });
+        if (!agent) {
+          return ResponseBuilder.error(res, 'Target Agent not found or not active under your account', 404);
+        }
+      }
 
       await vobizNumber.update({
         status: status !== undefined ? status : vobizNumber.status,
+        agentId: agentId !== undefined ? agentId : vobizNumber.agentId,
         providerData: providerData !== undefined ? providerData : vobizNumber.providerData,
       });
 

@@ -97,6 +97,10 @@ Campaign.belongsTo(VobizNumber, { foreignKey: 'vobiz_number_id', as: 'vobizNumbe
 Agent.hasMany(Campaign, { foreignKey: 'agent_id', as: 'campaigns' });
 Campaign.belongsTo(Agent, { foreignKey: 'agent_id', as: 'agent' });
 
+// VobizNumber <-> Agent
+Agent.hasMany(VobizNumber, { foreignKey: 'agent_id', as: 'vobizNumbers' });
+VobizNumber.belongsTo(Agent, { foreignKey: 'agent_id', as: 'agent' });
+
 // Campaign <-> CustomerList
 CustomerList.hasMany(Campaign, { foreignKey: 'customer_list_id', as: 'campaigns' });
 Campaign.belongsTo(CustomerList, { foreignKey: 'customer_list_id', as: 'customerList' });
