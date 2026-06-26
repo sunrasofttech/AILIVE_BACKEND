@@ -165,7 +165,7 @@ class VobizService {
 
   /**
    * Create a SubAccount for a merchant
-   * POST /api/v1/accounts/{auth_id}/sub-accounts/
+   * POST /Account/{auth_id}/Subaccount/
    */
   async createSubAccount(name) {
     const client = this._getParentClient();
@@ -175,7 +175,7 @@ class VobizService {
         enabled: true
       };
       
-      const response = await client.post(`/accounts/${defaults.vobiz.parentAuthId}/sub-accounts/`, payload);
+      const response = await client.post(`/Account/${defaults.vobiz.parentAuthId}/Subaccount/`, payload);
       
       if (response.data && response.data.auth_id) {
          return {
@@ -193,19 +193,20 @@ class VobizService {
 
   /**
    * List available phone numbers to purchase
-   * GET /api/v1/Account/{auth_id}/inventory/numbers
+   * GET /Account/{auth_id}/PhoneNumber/
    */
   async listAvailableNumbers(countryISO = 'IN', type = 'local', pattern = '') {
     const client = this._getParentClient();
     try {
       const params = {
-        country: countryISO,
+        country_iso: countryISO,
+        type: type
       };
       if (pattern) {
-        params.search = pattern;
+        params.pattern = pattern;
       }
       
-      const response = await client.get(`/Account/${defaults.vobiz.parentAuthId}/inventory/numbers`, { params });
+      const response = await client.get(`/Account/${defaults.vobiz.parentAuthId}/PhoneNumber/`, { params });
       return response.data;
     } catch (err) {
       console.error('Vobiz listAvailableNumbers Error:', err.response?.data || err.message);
@@ -215,14 +216,13 @@ class VobizService {
 
   /**
    * Buy a specific phone number under the parent account
-   * POST /api/v1/Account/{auth_id}/numbers/purchase-from-inventory
+   * POST /Account/{auth_id}/PhoneNumber/{number}/
    */
   async buyNumber(number) {
     const client = this._getParentClient();
     try {
       const e164 = number.startsWith('+') ? number : `+${number}`;
-      const payload = { e164 };
-      const response = await client.post(`/Account/${defaults.vobiz.parentAuthId}/numbers/purchase-from-inventory`, payload);
+      const response = await client.post(`/Account/${defaults.vobiz.parentAuthId}/PhoneNumber/${encodeURIComponent(e164)}/`);
       return response.data;
     } catch (err) {
       console.error('Vobiz buyNumber Error:', err.response?.data || err.message);
@@ -232,17 +232,17 @@ class VobizService {
 
   /**
    * Assign a purchased number to a subaccount
-   * POST /api/v1/account/{auth_id}/numbers/{e164}/assign-subaccount
+   * POST /Account/{auth_id}/Number/{e164}/
    */
   async assignNumberToSubAccount(number, subAccountAuthId) {
     const client = this._getParentClient();
     try {
       const e164 = number.startsWith('+') ? number : `+${number}`;
       const payload = {
-        sub_account_id: subAccountAuthId
+        subaccount: subAccountAuthId
       };
       
-      const response = await client.post(`/Account/${defaults.vobiz.parentAuthId}/numbers/${encodeURIComponent(e164)}/assign-subaccount`, payload);
+      const response = await client.post(`/Account/${defaults.vobiz.parentAuthId}/Number/${encodeURIComponent(e164)}/`, payload);
       return response.data;
     } catch (err) {
       console.error('Vobiz assignNumberToSubAccount Error:', err.response?.data || err.message);
@@ -252,13 +252,13 @@ class VobizService {
 
   /**
    * Unrent a phone number
-   * DELETE /api/v1/Account/{auth_id}/numbers/{e164}
+   * DELETE /Account/{auth_id}/Number/{e164}/
    */
   async unrentNumber(number) {
     const client = this._getParentClient();
     try {
       const e164 = number.startsWith('+') ? number : `+${number}`;
-      const response = await client.delete(`/Account/${defaults.vobiz.parentAuthId}/numbers/${encodeURIComponent(e164)}`);
+      const response = await client.delete(`/Account/${defaults.vobiz.parentAuthId}/Number/${encodeURIComponent(e164)}/`);
       return response.data;
     } catch (err) {
       console.error('Vobiz unrentNumber Error:', err.response?.data || err.message);
@@ -317,6 +317,7 @@ class VobizService {
         let createAppResponse;
         try {
           createAppResponse = await client.post(`/Account/${authId}/Application/`, {
+            name: appName,
             app_name: appName,
             answer_url: answerUrl,
             answer_method: 'POST'
@@ -324,6 +325,7 @@ class VobizService {
         } catch (createErr) {
           console.warn(`[VoBiz Service] Create via /Application/ failed (${createErr.message}), trying /applications/`);
           createAppResponse = await client.post(`/Account/${authId}/applications/`, {
+            name: appName,
             app_name: appName,
             answer_url: answerUrl,
             answer_method: 'POST'
