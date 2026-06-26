@@ -213,6 +213,23 @@ class VobizController {
         }
       }
 
+      // Setup inbound routing in Vobiz if sub-account is configured
+      try {
+        const account = await VobizAccount.findOne({ where: { userId: req.user.id } });
+        if (account) {
+          const encryptEnabled = defaults.vobiz.encryptCredentials;
+          const decryptedApiSecret = encryptEnabled ? decrypt(account.apiSecret) : account.apiSecret;
+
+          await vobizService.setupInboundRouting({
+            authId: account.customerId,
+            authToken: decryptedApiSecret,
+            number: number
+          });
+        }
+      } catch (routingErr) {
+        console.error('Failed to setup inbound routing on manual add:', routingErr.message);
+      }
+
       const vobizNumber = await VobizNumber.create({
         userId: req.user.id,
         number,
@@ -375,6 +392,20 @@ class VobizController {
 
       // Assign to the sub-account
       await vobizService.assignNumberToSubAccount(number, subAccountAuthId);
+
+      // Setup inbound routing in the sub-account
+      try {
+        const encryptEnabled = defaults.vobiz.encryptCredentials;
+        const decryptedApiSecret = encryptEnabled ? decrypt(account.apiSecret) : account.apiSecret;
+
+        await vobizService.setupInboundRouting({
+          authId: subAccountAuthId,
+          authToken: decryptedApiSecret,
+          number: number
+        });
+      } catch (routingErr) {
+        console.error('Failed to setup inbound routing on purchase:', routingErr.message);
+      }
 
       // Save to database
       const vobizNumber = await VobizNumber.create({

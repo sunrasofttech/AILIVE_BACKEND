@@ -265,6 +265,111 @@ class VobizService {
       throw new Error(err.response?.data?.message || 'Failed to unrent phone number');
     }
   }
+
+  /**
+   * Automatically creates or retrieves the "AILIVE_INBOUND" Voice Application 
+   * in the merchant sub-account, and links the phone number to it.
+   */
+  async setupInboundRouting({ authId, authToken, number }) {
+    const isMock = !authId || 
+                   authId.includes('your_') || 
+                   authId.includes('mock') || 
+                   (process.env.NODE_ENV !== 'production' && process.env.VOBIZ_FORCE_REAL_CALL !== 'true');
+
+    if (isMock) {
+      console.log(`[VoBiz Service Mock] Setup inbound routing for number ${number} with mock authId ${authId}`);
+      return { success: true };
+    }
+
+    try {
+      const client = this._getClient(authId, authToken);
+      
+      // 1. Check if application already exists
+      let appId = null;
+      let apps = [];
+      try {
+        const listResponse = await client.get(`/Account/${authId}/Application/`);
+        apps = listResponse.data?.objects || listResponse.data || [];
+      } catch (listErr) {
+        console.warn(`[VoBiz Service] List via /Application/ failed (${listErr.message}), trying /applications/`);
+        try {
+          const listResponse = await client.get(`/Account/${authId}/applications/`);
+          apps = listResponse.data?.objects || listResponse.data || [];
+        } catch (listErr2) {
+          console.error('[VoBiz Service] Failed to list applications with both formats:', listErr2.message);
+        }
+      }
+
+      if (Array.isArray(apps)) {
+        const existingApp = apps.find(app => app.app_name === 'AILIVE_INBOUND');
+        if (existingApp) {
+          appId = existingApp.app_id || existingApp.id;
+          console.log(`[VoBiz Service] Found existing Application "AILIVE_INBOUND" with ID: ${appId}`);
+        }
+      }
+
+      // 2. If application doesn't exist, create it
+      if (!appId) {
+        const appName = 'AILIVE_INBOUND';
+        const answerUrl = `https://${defaults.ws.host}/api/v1/vobiz/answer`;
+        console.log(`[VoBiz Service] Creating Application "${appName}" with answerUrl: ${answerUrl}`);
+        
+        let createAppResponse;
+        try {
+          createAppResponse = await client.post(`/Account/${authId}/Application/`, {
+            app_name: appName,
+            answer_url: answerUrl,
+            answer_method: 'POST'
+          });
+        } catch (createErr) {
+          console.warn(`[VoBiz Service] Create via /Application/ failed (${createErr.message}), trying /applications/`);
+          createAppResponse = await client.post(`/Account/${authId}/applications/`, {
+            app_name: appName,
+            answer_url: answerUrl,
+            answer_method: 'POST'
+          });
+        }
+        
+        appId = createAppResponse.data?.app_id || createAppResponse.data?.id;
+        if (!appId) {
+          throw new Error('Application creation did not return app_id or id');
+        }
+        console.log(`[VoBiz Service] Successfully created Application "AILIVE_INBOUND" with ID: ${appId}`);
+      }
+
+      // 3. Link the phone number to this application
+      const e164 = number.startsWith('+') ? number : `+${number}`;
+      console.log(`[VoBiz Service] Linking phone number ${e164} to Application ${appId}`);
+      
+      let linkResponse;
+      try {
+        linkResponse = await client.post(`/Account/${authId}/Number/${encodeURIComponent(e164)}/`, {
+          app_id: appId
+        });
+      } catch (err1) {
+        console.warn(`[VoBiz Service] Link via /Number/ failed (${err1.message}), trying /numbers/`);
+        try {
+          linkResponse = await client.post(`/Account/${authId}/numbers/${encodeURIComponent(e164)}/`, {
+            app_id: appId
+          });
+        } catch (err2) {
+          console.warn(`[VoBiz Service] Link via /numbers/ failed (${err2.message}), trying sub-resource assign`);
+          linkResponse = await client.post(`/Account/${authId}/Application/${appId}/`, {
+            numbers: [e164]
+          });
+        }
+      }
+      
+      console.log(`[VoBiz Service] Successfully linked number ${e164} to Application.`);
+      return { success: true, appId };
+    } catch (err) {
+      console.error('[VoBiz Service] setupInboundRouting failed:', err.response ? err.response.data : err.message);
+      return {
+        success: false,
+        error: err.response ? JSON.stringify(err.response.data) : err.message
+      };
+    }
+  }
 }
 
 module.exports = new VobizService();
