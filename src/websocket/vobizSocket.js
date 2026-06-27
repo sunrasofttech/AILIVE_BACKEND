@@ -32,11 +32,11 @@ function encodeMuLawSample(sample) {
   if (sample > CLIP) sample = CLIP;
   let exponent = encodeTable[(sample>>7) & 0xFF];
   let mantissa = (sample >> (exponent+3)) & 0x0F;
-  return ~(sign | (exponent << 4) | mantissa);
+  return (sign | (exponent << 4) | mantissa) ^ 0xFF;
 }
 
 function decodeMuLawSample(muLawSample) {
-  muLawSample = ~muLawSample;
+  muLawSample = muLawSample ^ 0xFF;
   let sign = (muLawSample & 0x80);
   let exponent = (muLawSample >> 4) & 0x07;
   let mantissa = muLawSample & 0x0F;
@@ -154,7 +154,10 @@ class VobizSocketHandler {
             let payloadBuffer;
             let outputContentType;
 
-            if (format.encoding.toLowerCase().includes('mulaw')) {
+            const encodingStr = (format.encoding || 'audio/x-mulaw').toLowerCase();
+            const isMuLaw = encodingStr.includes('mulaw') || encodingStr.includes('ulaw') || encodingStr.includes('pcmu');
+
+            if (isMuLaw) {
               // Downsample from 16kHz to negotiated sample rate (usually 8kHz)
               const resampled = resamplePCM(pcmBuffer, 16000, format.sampleRate || 8000);
               // Encode to mu-law
@@ -218,7 +221,17 @@ class VobizSocketHandler {
             const sampleRate = format.sampleRate || 8000;
             ws.mediaFormat = { encoding, sampleRate };
 
-            console.log(`[VoBiz Stream] Call started. StreamId: ${frame.start?.streamId}, negotiatedFormat: ${encoding} at ${sampleRate}Hz`);
+            const startMsg = `[VoBiz Stream] Call started. StreamId: ${frame.start?.streamId}, negotiatedFormat: ${encoding} at ${sampleRate}Hz`;
+            console.log(startMsg);
+            try {
+              await CallLog.create({
+                callSessionId: session.id,
+                logLevel: 'info',
+                message: startMsg,
+              });
+            } catch (dbErr) {
+              // ignore
+            }
             return;
           }
 
@@ -236,8 +249,10 @@ class VobizSocketHandler {
             
             let pcm16k;
             const format = ws.mediaFormat || { encoding: 'audio/x-mulaw', sampleRate: 8000 };
+            const encodingStr = (format.encoding || 'audio/x-mulaw').toLowerCase();
+            const isMuLaw = encodingStr.includes('mulaw') || encodingStr.includes('ulaw') || encodingStr.includes('pcmu');
 
-            if (format.encoding.toLowerCase().includes('mulaw')) {
+            if (isMuLaw) {
               // Decode 8kHz mu-law to 8kHz Linear PCM
               const pcm8k = decodeMuLaw(inputBuffer);
               // Resample 8kHz PCM to 16kHz PCM
@@ -252,6 +267,15 @@ class VobizSocketHandler {
           }
         } catch (msgErr) {
           console.error('Error handling VoBiz stream frame:', msgErr);
+          try {
+            await CallLog.create({
+              callSessionId: session.id,
+              logLevel: 'error',
+              message: `Error handling VoBiz stream frame: ${msgErr.message}`,
+            });
+          } catch (dbErr) {
+            // ignore
+          }
         }
       });
 
