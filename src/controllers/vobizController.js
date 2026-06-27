@@ -96,6 +96,7 @@ class VobizController {
         customerId: customer.id,
         wsSessionToken: wsToken,
         status: 'initiated',
+        direction: 'inbound',
       });
 
       await CallLog.create({

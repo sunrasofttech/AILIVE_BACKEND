@@ -50,6 +50,11 @@ CallSession.init(
       type: DataTypes.STRING(20),
       defaultValue: 'initiated', // initiated, connected, completed, failed, no-answer, busy
     },
+    direction: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+      defaultValue: 'outbound', // 'inbound' or 'outbound'
+    },
     startTime: {
       type: DataTypes.DATE,
       allowNull: true,

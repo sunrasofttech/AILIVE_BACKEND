@@ -163,6 +163,7 @@ async function processPlaceCall(payload) {
       customerId,
       wsSessionToken: wsToken,
       status: 'initiated',
+      direction: 'outbound',
     });
 
     // Register active call in ZSET
