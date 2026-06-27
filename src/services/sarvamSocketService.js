@@ -79,7 +79,9 @@ class SarvamSTTStream {
 
     try {
       const wsBaseUrl = this.apiBaseUrl.replace(/^http/, 'ws');
-      const url = `${wsBaseUrl}/speech-to-text/ws?language-code=${encodeURIComponent(this.languageCode)}&model=saaras:v3&mode=transcribe&sample_rate=16000&high_vad_sensitivity=true&vad_signals=true&flush_signal=true`;
+      // NOTE: high_vad_sensitivity=false to avoid fragmenting natural pauses.
+      // vad_signals and flush_signal remain enabled so VoicePipeline's own silence timer handles finalization.
+      const url = `${wsBaseUrl}/speech-to-text/ws?language-code=${encodeURIComponent(this.languageCode)}&model=saaras:v3&mode=transcribe&sample_rate=16000&high_vad_sensitivity=false&vad_signals=true&flush_signal=true`;
 
       console.log(`[Sarvam STT WSS] Connecting to: ${url}`);
       this.ws = new WebSocket(url, {

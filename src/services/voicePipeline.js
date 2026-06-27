@@ -162,7 +162,8 @@ class VoicePipeline {
 
     this.accumulatedTranscript = '';
     this.transcriptionSilenceTimer = null;
-    this.SILENCE_TIMEOUT_MS = 1050;
+    // 1500ms gives natural pauses room (reduced from 1050 to avoid mid-sentence flushing)
+    this.SILENCE_TIMEOUT_MS = 1500;
     this.pendingUserTranscripts = [];
 
     this.sarvamSttStream = null;
@@ -195,8 +196,8 @@ class VoicePipeline {
 
     // Inject call direction context into the system prompt so the LLM is aware
     const directionContext = this.direction === 'inbound'
-      ? "This is an INBOUND call. The customer dialed your number to speak with you. (They called you)."
-      : "This is an OUTBOUND call. You dialed the customer's phone number to speak with them. (You called them).";
+      ? "This is an INBOUND call. The customer dialed your number to speak with you. (They called you). Wait for them to state their reason before responding."
+      : "This is an OUTBOUND call. You dialed the customer's phone number to speak with them. (You called them). IMPORTANT: You MUST start by greeting them, stating your name, and briefly explaining why you are calling — in ONE short sentence.";
 
     // Resolve customer variables in prompt & greeting
     const baseSystemPrompt = replaceCustomerVariables(this.agent.systemPrompt, this.customer);
@@ -210,7 +211,10 @@ class VoicePipeline {
 - Use natural human conversational elements occasionally (e.g., "Oh", "Sure", "Well", "I see").
 - Keep responses extremely short, concise, and simple (1-2 sentences maximum, under 20 words per turn) to maintain a fast, natural flow.
 - Never output markdown lists, bullet points, asterisks, brackets, or code-like structures. Speak in plain conversational sentences.
-- Match the customer's language (English, Hindi, etc.) naturally and dynamically.]`;
+- Match the customer's language (English, Hindi, etc.) naturally and dynamically.
+- CRITICAL: If the customer asks "why did you call" or "who is this" — explain the purpose of this call immediately and politely. Never respond with a counter-question.
+- If the customer sounds confused or irritated, apologize briefly and state the purpose of the call clearly in simpler words.
+- If the customer's speech is unclear or seems garbled, politely ask them to repeat once — do not guess or make assumptions.]`;
 
     // Pre-configure customer info if available
     let customerInfoContext = '';
@@ -673,9 +677,39 @@ class VoicePipeline {
     }, this.SILENCE_TIMEOUT_MS);
   }
 
+  /**
+   * Basic validation to reject garbled or noise-only STT transcripts.
+   * Returns true if the transcript seems valid enough to process.
+   */
+  _isValidTranscript(transcript) {
+    if (!transcript || transcript.length < 2) return false;
+
+    // Reject if >60% of characters are non-alpha (likely noise, not speech)
+    const alphaChars = (transcript.match(/[a-zA-Z\u00C0-\u024F\u0900-\u097F\u0B00-\u0B7F\u0C00-\u0C7F\u0D00-\u0D7F\u0B80-\u0BFF\u0C80-\u0CFF\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF]/g) || []);
+    const ratio = transcript.length > 0 ? alphaChars.length / transcript.length : 0;
+    if (ratio < 0.3) {
+      this._log('info', `[STT filter] Rejected low-alpha transcript (ratio: ${ratio.toFixed(2)}): "${transcript}"`);
+      return false;
+    }
+
+    // Reject single repeated character patterns (aaaaaa, ...., etc.)
+    if (/^(.)\1{3,}$/.test(transcript.replace(/\s/g, ''))) {
+      this._log('info', `[STT filter] Rejected repeated-character transcript: "${transcript}"`);
+      return false;
+    }
+
+    return true;
+  }
+
   _processFinalTranscript(transcript) {
     const finalTranscript = normalizeTranscript(transcript);
     if (!finalTranscript) {
+      return false;
+    }
+
+    // STT quality gate — reject garbled/noise-only transcripts
+    if (!this._isValidTranscript(finalTranscript)) {
+      this.accumulatedTranscript = '';
       return false;
     }
 
