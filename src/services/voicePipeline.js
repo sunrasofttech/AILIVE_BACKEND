@@ -164,6 +164,12 @@ class VoicePipeline {
     this.transcriptionSilenceTimer = null;
     // 1500ms gives natural pauses room (reduced from 1050 to avoid mid-sentence flushing)
     this.SILENCE_TIMEOUT_MS = 1500;
+
+    // Inactivity / silence monitor — ends the call if neither party speaks for this long
+    this.silenceTimeoutMs = options.silenceTimeoutMs || 15000; // 15s default
+    this.silenceTimer = null;
+    this.onSilenceTimeout = options.onSilenceTimeout || null;
+
     this.pendingUserTranscripts = [];
 
     this.sarvamSttStream = null;
@@ -226,7 +232,15 @@ class VoicePipeline {
 - Notes: ${this.customer.notes || 'None'}]`;
     }
 
-    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]${conversationalGuidelines}${customerInfoContext}`;
+    // Call-ending instruction
+    const endCallInstruction = `
+[CALL ENDING RULE:
+If the customer clearly indicates they want to end the call (e.g., says goodbye, thank you that's all, call khatam, bye, baad mein baat karte hain, or similar), respond politely in 1 sentence saying goodbye, and at the VERY END of your response add the token {{hangup}}.
+Do NOT add {{hangup}} anywhere except the very end when the customer clearly wants to end.
+Examples of when to end: "thank you bye", "that's all", "call cut karo", "baad mein", "rakh do phone".
+]`;
+
+    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]${conversationalGuidelines}${endCallInstruction}${customerInfoContext}`;
 
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
       ? this.agent.aiProvider
@@ -416,19 +430,27 @@ class VoicePipeline {
       model: defaults.gemini.liveModel,
       onResponseText: async (text) => {
         try {
-          this._log('info', `Agent completed response: ${text}`);
-          if (this.onAgentTranscription) this.onAgentTranscription(text);
+          // Check for AI hangup signal and strip it
+          this._checkForCallEndRequest(text, 'agent');
+          const cleanText = text.replace(/\{\{hangup\}\}/g, '').trim();
+          if (!cleanText) return; // Only {{hangup}} — nothing to say, just end
+          this._log('info', `Agent completed response: ${cleanText}`);
+          if (this.onAgentTranscription) this.onAgentTranscription(cleanText);
         } catch (err) {
           this._log('error', `Gemini response logging failure: ${err.message}`);
         }
       },
       onResponseSentence: async (sentenceText, ttsGeneration) => {
-        this._enqueueTtsPhrase(sentenceText, ttsGeneration);
+        // Strip {{hangup}} from individual sentences before TTS
+        const cleanSentence = sentenceText.replace(/\{\{hangup\}\}/g, '').trim();
+        if (cleanSentence) {
+          this._enqueueTtsPhrase(cleanSentence, ttsGeneration);
+        }
       },
       onStartResponse: () => {
         const ttsGeneration = ++this._ttsGeneration;
         this._activeTtsGeneration = ttsGeneration;
-        this._setAgentSpeaking(3000);
+        this._setAgentSpeaking(15000); // 15s covers API response time; pacing queue will shorten once audio starts
         return ttsGeneration;
       },
       onError: (err) => {
@@ -447,19 +469,27 @@ class VoicePipeline {
       model: defaults.sarvam.chatModel || 'sarvam-2b',
       onResponseText: async (text) => {
         try {
-          this._log('info', `Agent completed response: ${text}`);
-          if (this.onAgentTranscription) this.onAgentTranscription(text);
+          // Check for AI hangup signal and strip it
+          this._checkForCallEndRequest(text, 'agent');
+          const cleanText = text.replace(/\{\{hangup\}\}/g, '').trim();
+          if (!cleanText) return; // Only {{hangup}} — nothing to say, just end
+          this._log('info', `Agent completed response: ${cleanText}`);
+          if (this.onAgentTranscription) this.onAgentTranscription(cleanText);
         } catch (err) {
           this._log('error', `Sarvam response logging failure: ${err.message}`);
         }
       },
       onResponseSentence: async (sentenceText, ttsGeneration) => {
-        this._enqueueTtsPhrase(sentenceText, ttsGeneration);
+        // Strip {{hangup}} from individual sentences before TTS
+        const cleanSentence = sentenceText.replace(/\{\{hangup\}\}/g, '').trim();
+        if (cleanSentence) {
+          this._enqueueTtsPhrase(cleanSentence, ttsGeneration);
+        }
       },
       onStartResponse: () => {
         const ttsGeneration = ++this._ttsGeneration;
         this._activeTtsGeneration = ttsGeneration;
-        this._setAgentSpeaking(3000);
+        this._setAgentSpeaking(15000); // 15s covers API response time; pacing queue will shorten once audio starts
         return ttsGeneration;
       },
       onError: (err) => {
@@ -514,6 +544,9 @@ class VoicePipeline {
       setImmediate(() => this._playPreRecordedFirstMessage(preRecordedFilePath));
     }
 
+    // Start the inactivity monitor — call will auto-end after silenceTimeoutMs of no activity
+    this._resetSilenceTimer();
+
     this._isSwitchingProvider = false;
   }
 
@@ -530,6 +563,81 @@ class VoicePipeline {
         }
       }
     }, durationMs);
+    // Agent speaking counts as activity — reset the inactivity monitor
+    this._resetSilenceTimer();
+  }
+
+  /**
+   * Reset the silence/inactivity monitor. Called whenever the agent or customer speaks.
+   * If neither speaks for `silenceTimeoutMs`, the call is ended automatically.
+   */
+  _resetSilenceTimer() {
+    if (!this.isConnected || !this.silenceTimeoutMs) return;
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => {
+      if (!this.isConnected) return;
+      this._log('warn', `[Silence Timeout] No activity for ${this.silenceTimeoutMs}ms — ending call.`);
+      if (this.onSilenceTimeout) {
+        this.onSilenceTimeout();
+      }
+    }, this.silenceTimeoutMs);
+  }
+
+  _clearSilenceTimer() {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  /**
+   * Triggered when the customer explicitly asks to end the call or
+   * the agent has said goodbye with {{hangup}} token.
+   */
+  _endCall(reason) {
+    if (!this.isConnected) return;
+    this._log('info', `[Call End] ${reason}`);
+    this._clearSilenceTimer();
+    if (this.onSilenceTimeout) {
+      this.onSilenceTimeout();
+    }
+  }
+
+  /**
+   * Check if the user/agent text contains call-ending keywords or the {{hangup}} marker.
+   */
+  _checkForCallEndRequest(text, source) {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+
+    // Direct {{hangup}} marker from the AI
+    if (text.includes('{{hangup}}')) {
+      this._log('info', `[Call End] AI signaled hangup via {{hangup}} token in ${source}`);
+      this._endCall('Customer requested to end call (AI detected)');
+      return true;
+    }
+
+    // Customer-side explicit end-call keywords
+    if (source === 'customer') {
+      const endPhrases = [
+        'call cut', 'cut karo', 'call khatam', 'khatam karo',
+        'rakh do', 'ra kh do', 'baad mein', 'baad me',
+        'bye bye', 'goodbye', 'thank you bye', 'thanks bye',
+        'that\'s all', 'that is all', 'it\'s enough', 'bus karo',
+        'phone rakh', 'call end', 'end call', 'disconnect',
+        'i\'m done', 'i am done', 'all done', 'ho gaya',
+        'baat khatam', 'baat khtam', 'nikal lo', 'nice talking',
+      ];
+      for (const phrase of endPhrases) {
+        if (lower.includes(phrase)) {
+          this._log('info', `[Call End] Customer end-call keyword detected: "${phrase}"`);
+          this._endCall(`Customer said: "${text.substring(0, 60)}..."`);
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   _pushToPacingQueue(pcmBuffer, ttsGeneration) {
@@ -666,6 +774,9 @@ class VoicePipeline {
   _handleRealtimeTranscript(transcript) {
     if (!transcript || !transcript.trim()) return;
 
+    // Customer is speaking — reset the inactivity monitor
+    this._resetSilenceTimer();
+
     if (this.transcriptionSilenceTimer) {
       clearTimeout(this.transcriptionSilenceTimer);
     }
@@ -720,15 +831,28 @@ class VoicePipeline {
 
     this.accumulatedTranscript = '';
 
+    // Check if the customer explicitly asked to end the call
+    if (this._checkForCallEndRequest(finalTranscript, 'customer')) {
+      return false;
+    }
+
     if (this.isAgentSpeaking) {
       this.pendingUserTranscripts.push(finalTranscript);
       this._log('info', `[Interruption queued] Customer spoke while agent speaking; will process after agent finishes: "${finalTranscript}"`);
       return false;
     }
 
+    // Final customer transcript processed — reset inactivity monitor
+    this._resetSilenceTimer();
+
     this._log('info', `Customer spoke (real-time WSS): ${finalTranscript}`);
     if (this.onCustomerTranscription) this.onCustomerTranscription(finalTranscript);
-    this.geminiSession.sendUserTurn(finalTranscript);
+    try {
+      this.geminiSession.sendUserTurn(finalTranscript);
+      this._log('info', `[Gemini] sendUserTurn called successfully for: "${finalTranscript.substring(0, 50)}..."`);
+    } catch (err) {
+      this._log('error', `[Gemini] sendUserTurn crashed: ${err.message}`);
+    }
     return true;
   }
 
@@ -774,6 +898,7 @@ class VoicePipeline {
     this.isConnected = false;
     if (this.speakingTimeout) { clearTimeout(this.speakingTimeout); this.speakingTimeout = null; }
     if (this.transcriptionSilenceTimer) { clearTimeout(this.transcriptionSilenceTimer); this.transcriptionSilenceTimer = null; }
+    this._clearSilenceTimer();
     this._clearPacingQueue();
     await this.flushPendingInput();
     if (this.sarvamSttStream) {

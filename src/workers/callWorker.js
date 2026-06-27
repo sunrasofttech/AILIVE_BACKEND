@@ -219,6 +219,15 @@ async function processPlaceCall(payload) {
       await QueueService.deregisterActiveCall(campaignId, session.id);
     } else {
       console.log(`[Campaign Call Dispatched] Outbound call successfully placed. Call ID: ${dialResponse.callId}`);
+      // Store the VoBiz call UUID on the session so we can hang it up later via REST API
+      if (dialResponse.callId) {
+        try {
+          session.vobizCallUuid = dialResponse.callId;
+          await session.save();
+        } catch (saveErr) {
+          console.warn(`[Campaign Call] Failed to save vobizCallUuid on session: ${saveErr.message}`);
+        }
+      }
     }
 
   } catch (err) {

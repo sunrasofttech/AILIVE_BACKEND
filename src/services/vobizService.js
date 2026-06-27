@@ -372,6 +372,50 @@ class VobizService {
       };
     }
   }
+
+  /**
+   * Hang up an active call via VoBiz REST API
+   * DELETE https://api.vobiz.ai/api/v1/Account/{auth_id}/Call/{call_uuid}/
+   * Terminates the call immediately. No request body needed.
+   *
+   * @param {object} params
+   * @param {string} params.authId - VoBiz Auth ID (X-Auth-ID)
+   * @param {string} params.authToken - VoBiz Auth Token (X-Auth-Token)
+   * @param {string} params.callUuid - The VoBiz call UUID to terminate
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async hangupCall({ authId, authToken, callUuid }) {
+    if (!callUuid) {
+      console.warn('[VoBiz Hangup] No call UUID provided — skipping API call.');
+      return { success: false, error: 'No call UUID' };
+    }
+
+    // In mock/dev mode, skip the actual API call
+    if (!authId || authId.includes('your_') || authId.includes('mock')) {
+      console.log(`[VoBiz Hangup Mock] Would hang up call ${callUuid}`);
+      return { success: true };
+    }
+
+    try {
+      const url = `${this.apiUrl}/Account/${authId}/Call/${callUuid}/`;
+      console.log(`[VoBiz Hangup] Hanging up call ${callUuid} via DELETE ${url}`);
+
+      await axios.delete(url, {
+        headers: {
+          'X-Auth-ID': authId,
+          'X-Auth-Token': authToken,
+        },
+        timeout: 10000,
+      });
+
+      console.log(`[VoBiz Hangup] Call ${callUuid} terminated successfully.`);
+      return { success: true };
+    } catch (error) {
+      const errMsg = error.response?.data || error.message;
+      console.error(`[VoBiz Hangup] Failed to hang up call ${callUuid}:`, errMsg);
+      return { success: false, error: typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg) };
+    }
+  }
 }
 
 module.exports = new VobizService();

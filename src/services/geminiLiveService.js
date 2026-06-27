@@ -98,7 +98,10 @@ class GeminiLiveSession {
       return;
     }
 
-    this._sendToGemini(text);
+    console.log(`[Gemini Live] Sending user turn (turn #${this.conversationHistory.length + 1}): "${text.substring(0, 80)}..."`);
+    this._sendToGemini(text).catch(err => {
+      console.error(`[Gemini Live] Unhandled error in _sendToGemini:`, err);
+    });
   }
 
   /**
@@ -120,6 +123,18 @@ class GeminiLiveSession {
    * @param {string} userText - The user's message text
    */
   async _sendToGemini(userText) {
+    const startTime = Date.now();
+    let responseReceived = false;
+    let firstTokenTime = 0;
+
+    // Safety timeout: if no response starts within 15s, warn
+    const safetyTimer = setTimeout(() => {
+      if (!responseReceived) {
+        console.warn(`[Gemini Live] WARNING: No response started for 15s. Turn: "${userText.substring(0, 60)}..."`);
+        console.warn(`[Gemini Live] History size: ${this.conversationHistory.length} turns`);
+      }
+    }, 15000);
+
     try {
       // Add user turn to conversation history
       this.conversationHistory.push({
@@ -183,6 +198,12 @@ class GeminiLiveSession {
       let currentPhrase = '';
 
       stream.on('data', (chunk) => {
+        if (!responseReceived) {
+          responseReceived = true;
+          firstTokenTime = Date.now();
+          clearTimeout(safetyTimer);
+          console.log(`[Gemini Live] First token received after ${firstTokenTime - startTime}ms`);
+        }
         const textChunk = chunk.toString('utf8');
         buffer += textChunk;
 
@@ -228,8 +249,12 @@ class GeminiLiveSession {
       });
 
       stream.on('end', () => {
+        clearTimeout(safetyTimer);
         this.activeController = null;
         if (!this.isConnected) return;
+
+        const totalTime = Date.now() - startTime;
+        console.log(`[Gemini Live] Stream ended. Total time: ${totalTime}ms, Response length: ${fullResponseText.length} chars`);
 
         // Flush remaining text
         if (currentPhrase.trim()) {
@@ -252,6 +277,7 @@ class GeminiLiveSession {
       });
 
       stream.on('error', (err) => {
+        clearTimeout(safetyTimer);
         this.activeController = null;
         if (err.name === 'AbortError' || err.message === 'canceled') {
           return;

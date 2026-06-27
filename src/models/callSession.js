@@ -55,6 +55,11 @@ CallSession.init(
       allowNull: false,
       defaultValue: 'outbound', // 'inbound' or 'outbound'
     },
+    vobizCallUuid: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'vobiz_call_uuid',
+    },
     startTime: {
       type: DataTypes.DATE,
       allowNull: true,

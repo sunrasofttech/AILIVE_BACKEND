@@ -1,7 +1,9 @@
 const url = require('url');
-const { CallSession, Agent, Voice, CallLog, Campaign, Customer } = require('../models');
+const { CallSession, Agent, Voice, CallLog, Campaign, Customer, VobizAccount } = require('../models');
 const QueueService = require('../services/queueService');
 const VoicePipeline = require('../services/voicePipeline');
+const VobizService = require('../services/vobizService');
+const { decrypt } = require('../utils/crypto');
 
 const encodeTable = [
     0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,
@@ -210,6 +212,42 @@ class VobizSocketHandler {
             logLevel: level,
             message: message,
           });
+        },
+        onSilenceTimeout: async () => {
+          console.log(`[VoBiz Call] Ending call session ${session.id} — silence timeout or user hangup.`);
+
+          // 1. Call VoBiz REST API to hang up the call (terminates both legs, generates CDR)
+          if (session.vobizCallUuid) {
+            try {
+              const vobizAccount = await VobizAccount.findOne({ where: { userId: session.userId } });
+              if (vobizAccount) {
+                let authId = vobizAccount.apiKey;
+                let authToken = vobizAccount.apiSecret;
+                try {
+                  const crypto = require('../utils/crypto');
+                  authId = crypto.decrypt(authId) || authId;
+                  authToken = crypto.decrypt(authToken) || authToken;
+                } catch (_) {}
+                VobizService.hangupCall({ authId, authToken, callUuid: session.vobizCallUuid });
+              }
+            } catch (err) {
+              console.warn(`[VoBiz Call] Failed to look up VoBiz account for hangup: ${err.message}`);
+            }
+          }
+
+          // 2. Send WebSocket stop event as backup signal to VoBiz
+          try {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify({ event: 'stop', stop: { reason: 'call-ended' } }));
+            }
+          } catch (sendErr) {
+            console.warn(`[VoBiz Call] Failed to send stop event: ${sendErr.message}`);
+          }
+
+          // 3. Close the WebSocket — triggers _cleanupSession to save transcript + recording
+          if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) {
+            ws.close(1000, 'Call ended');
+          }
         },
       });
 
