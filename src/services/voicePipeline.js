@@ -163,7 +163,7 @@ class VoicePipeline {
     this.accumulatedTranscript = '';
     this.transcriptionSilenceTimer = null;
     this.SILENCE_TIMEOUT_MS = 1050;
-    this.pendingCustomerTranscript = '';
+    this.pendingUserTranscripts = [];
 
     this.sarvamSttStream = null;
     this.sarvamTtsStream = null;
@@ -397,11 +397,12 @@ class VoicePipeline {
     if (this.geminiSession && typeof this.geminiSession.cancelStream === 'function') {
       this.geminiSession.cancelStream();
     }
-    if (this.pendingCustomerTranscript && this.pendingCustomerTranscript.trim()) {
-      const queuedText = this.pendingCustomerTranscript.trim();
-      this.pendingCustomerTranscript = '';
-      this._log('info', `[Interruption resumed] Processing queued customer speech after cancel: "${queuedText}"`);
-      this._processFinalTranscript(queuedText);
+    while (this.pendingUserTranscripts.length > 0) {
+      const queuedText = this.pendingUserTranscripts.shift();
+      if (queuedText && queuedText.trim()) {
+        this._log('info', `[Interruption resumed] Processing queued customer speech after cancel: "${queuedText.trim()}"`);
+        this._processFinalTranscript(queuedText);
+      }
     }
   }
 
@@ -517,11 +518,12 @@ class VoicePipeline {
     if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
     this.speakingTimeout = setTimeout(() => {
       this.isAgentSpeaking = false;
-      if (this.pendingCustomerTranscript && this.pendingCustomerTranscript.trim()) {
-        const queuedText = this.pendingCustomerTranscript.trim();
-        this.pendingCustomerTranscript = '';
-        this._log('info', `[Interruption resumed] Processing queued customer speech: "${queuedText}"`);
-        this._processFinalTranscript(queuedText);
+      while (this.pendingUserTranscripts.length > 0) {
+        const queuedText = this.pendingUserTranscripts.shift();
+        if (queuedText && queuedText.trim()) {
+          this._log('info', `[Interruption resumed] Processing queued customer speech: "${queuedText.trim()}"`);
+          this._processFinalTranscript(queuedText);
+        }
       }
     }, durationMs);
   }
@@ -677,11 +679,6 @@ class VoicePipeline {
       return false;
     }
 
-    if (!this.agent.allowInterruption && this.isAgentSpeaking) {
-      this._log('info', `[Interruption Blocked] Customer spoke: "${finalTranscript}" — agent still speaking, waiting.`);
-      return false;
-    }
-
     if (this.transcriptionSilenceTimer) {
       clearTimeout(this.transcriptionSilenceTimer);
       this.transcriptionSilenceTimer = null;
@@ -689,14 +686,10 @@ class VoicePipeline {
 
     this.accumulatedTranscript = '';
 
-    if (this.isAgentSpeaking && !isSubstantialInterruption(finalTranscript)) {
-      this.pendingCustomerTranscript = mergeTranscript(this.pendingCustomerTranscript, finalTranscript);
-      this._log('info', `[Interruption queued] Short speech while agent speaking; will process after agent finishes: "${finalTranscript}"`);
-      return false;
-    }
-
     if (this.isAgentSpeaking) {
-      this._cancelAgentSpeech();
+      this.pendingUserTranscripts.push(finalTranscript);
+      this._log('info', `[Interruption queued] Customer spoke while agent speaking; will process after agent finishes: "${finalTranscript}"`);
+      return false;
     }
 
     this._log('info', `Customer spoke (real-time WSS): ${finalTranscript}`);
@@ -734,11 +727,12 @@ class VoicePipeline {
       this.sarvamSttStream.flush();
     }
     this._flushRealtimeTranscript();
-    if (this.pendingCustomerTranscript && this.pendingCustomerTranscript.trim()) {
-      const queuedText = this.pendingCustomerTranscript.trim();
-      this.pendingCustomerTranscript = '';
-      this._log('info', `[Interruption resumed] Processing queued customer speech during flush: "${queuedText}"`);
-      this._processFinalTranscript(queuedText);
+    while (this.pendingUserTranscripts.length > 0) {
+      const queuedText = this.pendingUserTranscripts.shift();
+      if (queuedText && queuedText.trim()) {
+        this._log('info', `[Interruption resumed] Processing queued customer speech during flush: "${queuedText.trim()}"`);
+        this._processFinalTranscript(queuedText);
+      }
     }
   }
 
