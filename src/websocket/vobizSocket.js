@@ -92,8 +92,16 @@ class VobizSocketHandler {
     // Default media format (updated when the 'start' frame is received)
     ws.mediaFormat = { encoding: 'audio/x-mulaw', sampleRate: 8000 };
 
+    // Synchronously buffer early messages to prevent race conditions
+    const earlyBuffer = [];
+    const onBufferMessage = (data) => {
+      earlyBuffer.push(data);
+    };
+    ws.on('message', onBufferMessage);
+
     if (!token) {
       console.error('WS Connection rejected: Missing token');
+      ws.removeListener('message', onBufferMessage);
       ws.close(4001, 'Unauthorized: Missing session token');
       return;
     }
@@ -117,11 +125,13 @@ class VobizSocketHandler {
 
       if (!session) {
         console.error(`WS Connection rejected: Invalid token "${token}"`);
+        ws.removeListener('message', onBufferMessage);
         ws.close(4002, 'Unauthorized: Invalid session token');
         return;
       }
 
       if (session.status === 'completed' || session.status === 'failed') {
+        ws.removeListener('message', onBufferMessage);
         ws.close(4003, 'Session already terminated');
         return;
       }
@@ -209,9 +219,8 @@ class VobizSocketHandler {
       ws.transcriptChunks = transcriptChunks;
       ws.audioChunks = audioChunks;
 
-      // 3. Handle incoming customer audio stream
-      // VoBiz sends JSON frames with events: 'start', 'media', 'stop'
-      ws.on('message', async (message) => {
+      // 3. Define the main frame handler
+      const handleFrame = async (message) => {
         try {
           const frame = JSON.parse(message.toString());
 
@@ -277,7 +286,17 @@ class VobizSocketHandler {
             // ignore
           }
         }
-      });
+      };
+
+      // Remove the buffer listener and register the active handler
+      ws.removeListener('message', onBufferMessage);
+      
+      // Process buffered messages in order
+      for (const msg of earlyBuffer) {
+        await handleFrame(msg);
+      }
+
+      ws.on('message', handleFrame);
 
       // 4. Handle Disconnects & Session Cleanup
       ws.on('close', async (code, reason) => {
@@ -296,6 +315,8 @@ class VobizSocketHandler {
 
     } catch (err) {
       console.error('WebSocket connection setup crash:', err);
+      // Remove temporary buffer listener in case of error
+      ws.removeListener('message', onBufferMessage);
       ws.close(1011, 'Internal connection error');
     }
   }
