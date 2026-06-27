@@ -168,14 +168,14 @@ class VobizSocketHandler {
             const isMuLaw = encodingStr.includes('mulaw') || encodingStr.includes('ulaw') || encodingStr.includes('pcmu');
 
             if (isMuLaw) {
-              // Downsample from 16kHz to negotiated sample rate (usually 8kHz)
-              const resampled = resamplePCM(pcmBuffer, 16000, format.sampleRate || 8000);
+              // Downsample from targetRate to negotiated sample rate (usually 8kHz)
+              const resampled = resamplePCM(pcmBuffer, targetRate || 16000, format.sampleRate || 8000);
               // Encode to mu-law
               payloadBuffer = encodeMuLaw(resampled);
               outputContentType = 'audio/x-mulaw';
             } else {
-              // Resample from 16kHz to negotiated sample rate (L16)
-              payloadBuffer = resamplePCM(pcmBuffer, 16000, format.sampleRate || 16000);
+              // Resample from targetRate to negotiated sample rate (L16)
+              payloadBuffer = resamplePCM(pcmBuffer, targetRate || 16000, format.sampleRate || 16000);
               outputContentType = 'audio/x-l16';
             }
 
