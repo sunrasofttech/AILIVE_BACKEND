@@ -309,13 +309,16 @@ class VoicePipeline {
       },
       onSpeechEnd: () => {
         this._log('info', '[STT] END_SPEECH detected — flushing transcript');
+        if (this.transcriptionSilenceTimer) {
+          clearTimeout(this.transcriptionSilenceTimer);
+          this.transcriptionSilenceTimer = null;
+        }
         if (this.sarvamSttStream) {
           this.sarvamSttStream.flush();
         }
-        if (this.transcriptionSilenceTimer) {
-          clearTimeout(this.transcriptionSilenceTimer);
-        }
-        this.transcriptionSilenceTimer = setTimeout(() => this._flushRealtimeTranscript(), this.SILENCE_TIMEOUT_MS);
+        // Flush the final transcript immediately so user speech is not lost
+        // if the call ends or the connection closes shortly after END_SPEECH.
+        this._flushRealtimeTranscript();
       },
       onError: (err) => {
         this._log('error', `Sarvam STT WebSocket error: ${err.message}`);
