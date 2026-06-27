@@ -3,6 +3,69 @@ const { CallSession, Agent, Voice, CallLog, Campaign, Customer } = require('../m
 const QueueService = require('../services/queueService');
 const VoicePipeline = require('../services/voicePipeline');
 
+// G.711 mu-law table initialization
+const muLawToPcmTable = new Int16Array(256);
+for (let i = 0; i < 256; i++) {
+  let muLaw = ~i; // bitwise invert
+  let sign = (muLaw & 0x80);
+  let exponent = (muLaw & 0x70) >> 4;
+  let mantissa = (muLaw & 0x0F);
+  let sample = (mantissa << 3) + 33;
+  sample <<= exponent;
+  sample -= 33;
+  muLawToPcmTable[i] = (sign === 0) ? (sample) : (-sample);
+}
+
+function decodeMuLaw(muLawBuffer) {
+  const pcm = Buffer.alloc(muLawBuffer.length * 2);
+  for (let i = 0; i < muLawBuffer.length; i++) {
+    pcm.writeInt16LE(muLawToPcmTable[muLawBuffer[i]], i * 2);
+  }
+  return pcm;
+}
+
+function encodeMuLaw(pcmBuffer) {
+  const muLaw = Buffer.alloc(pcmBuffer.length / 2);
+  for (let i = 0; i < muLaw.length; i++) {
+    const sample = pcmBuffer.readInt16LE(i * 2);
+    let sign = (sample < 0) ? 0x80 : 0x00;
+    let absolute = Math.abs(sample);
+    
+    // clip
+    if (absolute > 32635) absolute = 32635;
+    absolute += 132;
+    
+    let exponent = 7;
+    while ((absolute & 0x4000) === 0 && exponent > 0) {
+      absolute <<= 1;
+      exponent--;
+    }
+    
+    let mantissa = (absolute >> 7) & 0x0F;
+    let mu = ~(sign | (exponent << 4) | mantissa);
+    muLaw[i] = mu;
+  }
+  return muLaw;
+}
+
+function resamplePCM(inputBuffer, inputRate, outputRate) {
+  if (inputRate === outputRate) return inputBuffer;
+  const inputSamples = Math.floor(inputBuffer.length / 2);
+  const outputSamples = Math.floor(inputSamples * outputRate / inputRate);
+  const outputBuffer = Buffer.alloc(outputSamples * 2);
+  for (let i = 0; i < outputSamples; i++) {
+    const srcPos = i * inputRate / outputRate;
+    const srcFloor = Math.floor(srcPos);
+    const srcCeil = Math.min(srcFloor + 1, inputSamples - 1);
+    const frac = srcPos - srcFloor;
+    const s1 = inputBuffer.readInt16LE(srcFloor * 2);
+    const s2 = inputBuffer.readInt16LE(srcCeil * 2);
+    const sample = Math.round(s1 + frac * (s2 - s1));
+    outputBuffer.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * 2);
+  }
+  return outputBuffer;
+}
+
 class VobizSocketHandler {
   /**
    * Handle incoming WebSocket connection from VoBiz
@@ -12,6 +75,9 @@ class VobizSocketHandler {
   async handleConnection(ws, req) {
     const parameters = url.parse(req.url, true).query;
     const token = parameters.token;
+
+    // Default media format (updated when the 'start' frame is received)
+    ws.mediaFormat = { encoding: 'audio/x-mulaw', sampleRate: 8000 };
 
     if (!token) {
       console.error('WS Connection rejected: Missing token');
@@ -71,12 +137,28 @@ class VobizSocketHandler {
         direction: session.direction,
         onAudioOutput: (pcmBuffer, targetRate) => {
           if (ws.readyState === ws.OPEN) {
+            const format = ws.mediaFormat || { encoding: 'audio/x-mulaw', sampleRate: 8000 };
+            let payloadBuffer;
+            let outputContentType;
+
+            if (format.encoding.toLowerCase().includes('mulaw')) {
+              // Downsample from 16kHz to negotiated sample rate (usually 8kHz)
+              const resampled = resamplePCM(pcmBuffer, 16000, format.sampleRate || 8000);
+              // Encode to mu-law
+              payloadBuffer = encodeMuLaw(resampled);
+              outputContentType = 'audio/x-mulaw';
+            } else {
+              // Resample from 16kHz to negotiated sample rate (L16)
+              payloadBuffer = resamplePCM(pcmBuffer, 16000, format.sampleRate || 16000);
+              outputContentType = 'audio/x-l16';
+            }
+
             const playAudioEvent = JSON.stringify({
               event: 'playAudio',
               media: {
-                contentType: 'audio/x-l16',
-                sampleRate: targetRate,
-                payload: pcmBuffer.toString('base64'),
+                contentType: outputContentType,
+                sampleRate: format.sampleRate || 8000,
+                payload: payloadBuffer.toString('base64'),
               },
             });
             ws.send(playAudioEvent);
@@ -118,7 +200,12 @@ class VobizSocketHandler {
           const frame = JSON.parse(message.toString());
 
           if (frame.event === 'start') {
-            console.log(`[VoBiz Stream] Call started. StreamId: ${frame.start?.streamId}`);
+            const format = frame.start?.mediaFormat || {};
+            const encoding = format.encoding || 'audio/x-mulaw';
+            const sampleRate = format.sampleRate || 8000;
+            ws.mediaFormat = { encoding, sampleRate };
+
+            console.log(`[VoBiz Stream] Call started. StreamId: ${frame.start?.streamId}, negotiatedFormat: ${encoding} at ${sampleRate}Hz`);
             return;
           }
 
@@ -131,9 +218,24 @@ class VobizSocketHandler {
           }
 
           if (frame.event === 'media' && frame.media?.payload) {
-            const audioBuffer = Buffer.from(frame.media.payload, 'base64');
-            audioChunks.push(audioBuffer);
-            pipeline.handleAudioInput(audioBuffer);
+            const base64Payload = frame.media.payload;
+            const inputBuffer = Buffer.from(base64Payload, 'base64');
+            
+            let pcm16k;
+            const format = ws.mediaFormat || { encoding: 'audio/x-mulaw', sampleRate: 8000 };
+
+            if (format.encoding.toLowerCase().includes('mulaw')) {
+              // Decode 8kHz mu-law to 8kHz Linear PCM
+              const pcm8k = decodeMuLaw(inputBuffer);
+              // Resample 8kHz PCM to 16kHz PCM
+              pcm16k = resamplePCM(pcm8k, format.sampleRate || 8000, 16000);
+            } else {
+              // It is already raw PCM (L16), resample to 16kHz PCM
+              pcm16k = resamplePCM(inputBuffer, format.sampleRate || 16000, 16000);
+            }
+
+            audioChunks.push(pcm16k);
+            pipeline.handleAudioInput(pcm16k);
           }
         } catch (msgErr) {
           console.error('Error handling VoBiz stream frame:', msgErr);
