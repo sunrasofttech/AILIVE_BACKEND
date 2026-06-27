@@ -201,7 +201,17 @@ class VoicePipeline {
     const baseSystemPrompt = replaceCustomerVariables(this.agent.systemPrompt, this.customer);
     this.firstMessage = replaceCustomerVariables(this.agent.firstMessage, this.customer);
 
-    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]`;
+    // Pre-configure customer info if available
+    let customerInfoContext = '';
+    if (this.customer) {
+      customerInfoContext = `\n\n[Customer Information: You are in a call with a registered customer. Here are their details:
+- Name: ${this.customer.name || 'there'}
+- Mobile: ${this.customer.mobile || 'Unknown'}
+- Tags: ${this.customer.tags || 'None'}
+- Notes: ${this.customer.notes || 'None'}]`;
+    }
+
+    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]${customerInfoContext}`;
 
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
       ? this.agent.aiProvider
