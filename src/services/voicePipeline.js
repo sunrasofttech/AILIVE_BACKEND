@@ -205,8 +205,9 @@ class VoicePipeline {
     const conversationalGuidelines = `
 [Conversational Guidelines:
 - You must speak in a warm, natural, friendly, and human-like voice.
-- Speak in a lively, helpful, and pleasant tone (not robotic, dry, or formal).
-- Keep responses short, concise, and easy to follow (1-2 sentences maximum per turn) to sound natural over phone calls.
+- Behave exactly like a real human receptionist/agent on the phone. Do not sound like an AI assistant.
+- Use natural human conversational elements occasionally (e.g., "Oh", "Sure", "Well", "I see").
+- Keep responses extremely short, concise, and simple (1-2 sentences maximum, under 20 words per turn) to maintain a fast, natural flow.
 - Never output markdown lists, bullet points, asterisks, brackets, or code-like structures. Speak in plain conversational sentences.
 - Match the customer's language (English, Hindi, etc.) naturally and dynamically.]`;
 
@@ -322,11 +323,14 @@ class VoicePipeline {
     });
     this.sarvamSttStream.connect();
 
+    const targetPace = parseFloat(this.agent.pace) === 1.0 ? 1.10 : (parseFloat(this.agent.pace) || 1.10);
+    const targetTemp = parseFloat(this.agent.temperature) === 0.6 ? 0.75 : (parseFloat(this.agent.temperature) || 0.75);
+
     this.sarvamTtsStream = new SarvamTTSStream({
       languageCode: language,
       voiceId: voiceName,
-      pace: this.agent.pace,
-      temperature: this.agent.temperature,
+      pace: targetPace,
+      temperature: targetTemp,
       onAudioChunk: (audioBuffer) => {
         this._playTtsAudioChunk(audioBuffer, this._activeTtsGeneration);
       },
@@ -358,11 +362,14 @@ class VoicePipeline {
     }
 
     const voiceName = this.agent.voice?.voiceId || defaults.sarvam.defaultVoiceId;
+    const targetPace = parseFloat(this.agent.pace) === 1.0 ? 1.10 : (parseFloat(this.agent.pace) || 1.10);
+    const targetTemp = parseFloat(this.agent.temperature) === 0.6 ? 0.75 : (parseFloat(this.agent.temperature) || 0.75);
+
     this.sarvamTtsStream = new SarvamTTSStream({
       languageCode: targetTtsLanguage,
       voiceId: voiceName,
-      pace: this.agent.pace,
-      temperature: this.agent.temperature,
+      pace: targetPace,
+      temperature: targetTemp,
       onAudioChunk: (audioBuffer) => {
         this._playTtsAudioChunk(audioBuffer, this._activeTtsGeneration);
       },
