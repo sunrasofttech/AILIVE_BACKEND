@@ -33,6 +33,7 @@ class WebSocketHandler {
       // Instantiate Voice Pipeline
       const pipeline = new VoicePipeline({
         agent: agent,
+        direction: 'inbound',
         onAudioOutput: (pcmBuffer, targetRate) => {
           if (ws.readyState === ws.OPEN) {
             // Web clients will receive raw binary PCM 16-bit

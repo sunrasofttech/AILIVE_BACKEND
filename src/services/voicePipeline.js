@@ -138,6 +138,10 @@ class VoicePipeline {
     this._ttsGeneration = 0;
     this._activeTtsGeneration = null;
 
+    // Outgoing audio pacing queue for smooth, non-robotic playback
+    this.audioOutBuffer = Buffer.alloc(0);
+    this.audioInterval = null;
+
     this.accumulatedTranscript = '';
     this.transcriptionSilenceTimer = null;
     this.SILENCE_TIMEOUT_MS = 1050;
@@ -147,6 +151,15 @@ class VoicePipeline {
     this.detectedLanguageCode = null;
 
     this.isConnected = true;
+    this.direction = options.direction || 'outbound';
+
+    // Inject call direction context into the system prompt so the LLM is aware
+    const directionContext = this.direction === 'inbound'
+      ? "This is an INBOUND call. The customer dialed your number to speak with you. (They called you)."
+      : "This is an OUTBOUND call. You dialed the customer's phone number to speak with them. (You called them).";
+
+    this.combinedSystemPrompt = `${this.agent.systemPrompt}\n\n[System Call Context: ${directionContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]`;
+
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
       ? this.agent.aiProvider
       : 'custom';
@@ -156,7 +169,7 @@ class VoicePipeline {
 
     if (this.activeProvider === 'geminilive') {
       this.geminiSession = new GeminiMultimodalLiveSession({
-        systemPrompt: this.agent.systemPrompt,
+        systemPrompt: this.combinedSystemPrompt,
         voiceName: this.agent.voice?.voiceId || 'Puck',
         allowInterruption: this.agent.allowInterruption !== false,
         onAudioOutput: (pcmBuffer, sampleRate) => {
@@ -303,6 +316,7 @@ class VoicePipeline {
     this._activeTtsGeneration = null;
     this.isAgentSpeaking = false;
     if (this.speakingTimeout) clearTimeout(this.speakingTimeout);
+    this._clearPacingQueue();
     if (this.onClearAudio) this.onClearAudio();
     if (this.geminiSession && typeof this.geminiSession.cancelStream === 'function') {
       this.geminiSession.cancelStream();
@@ -311,7 +325,7 @@ class VoicePipeline {
 
   _createCustomGeminiSession() {
     return new GeminiLiveSession({
-      systemPrompt: this.agent.systemPrompt,
+      systemPrompt: this.combinedSystemPrompt,
       model: defaults.gemini.liveModel,
       onResponseText: async (text) => {
         try {
@@ -342,7 +356,7 @@ class VoicePipeline {
 
   _createCustomv2Session() {
     return new SarvamLiveSession({
-      systemPrompt: this.agent.systemPrompt,
+      systemPrompt: this.combinedSystemPrompt,
       model: defaults.sarvam.chatModel || 'sarvam-2b',
       onResponseText: async (text) => {
         try {
@@ -424,6 +438,59 @@ class VoicePipeline {
     }, durationMs);
   }
 
+  _pushToPacingQueue(pcmBuffer, ttsGeneration) {
+    if (ttsGeneration !== undefined && ttsGeneration !== this._ttsGeneration) return;
+
+    this.audioOutBuffer = Buffer.concat([this.audioOutBuffer, pcmBuffer]);
+
+    if (!this.audioInterval) {
+      const CHUNK_SIZE = 640; // 20ms of 16kHz 16-bit mono PCM (16000 * 2 * 0.02)
+      const INTERVAL_MS = 20;
+
+      this.audioInterval = setInterval(() => {
+        if (!this.isConnected) {
+          this._clearPacingQueue();
+          return;
+        }
+
+        if (this.audioOutBuffer.length >= CHUNK_SIZE) {
+          const chunk = this.audioOutBuffer.slice(0, CHUNK_SIZE);
+          this.audioOutBuffer = this.audioOutBuffer.slice(CHUNK_SIZE);
+
+          const durationMs = Math.round((chunk.length / 32000) * 1000);
+          this._setAgentSpeaking(durationMs + 300);
+
+          if (this.onAudioOutput) {
+            this.onAudioOutput(chunk, 16000);
+          }
+        } else {
+          // Send remaining bytes and clear interval
+          const chunk = this.audioOutBuffer;
+          this.audioOutBuffer = Buffer.alloc(0);
+          
+          if (chunk.length > 0) {
+            const durationMs = Math.round((chunk.length / 32000) * 1000);
+            this._setAgentSpeaking(durationMs + 300);
+            if (this.onAudioOutput) {
+              this.onAudioOutput(chunk, 16000);
+            }
+          }
+          
+          clearInterval(this.audioInterval);
+          this.audioInterval = null;
+        }
+      }, INTERVAL_MS);
+    }
+  }
+
+  _clearPacingQueue() {
+    if (this.audioInterval) {
+      clearInterval(this.audioInterval);
+      this.audioInterval = null;
+    }
+    this.audioOutBuffer = Buffer.alloc(0);
+  }
+
   _playTtsAudioChunk(audioBuffer, ttsGeneration) {
     if (!this.isConnected) return;
     if (ttsGeneration !== undefined && ttsGeneration !== this._ttsGeneration) return;
@@ -437,10 +504,7 @@ class VoicePipeline {
 
     const TARGET_RATE = 16000;
     const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
-    const rawDurationMs = Math.round((resampledPcm.length / 32000) * 1000);
-    this._setAgentSpeaking(rawDurationMs + 300);
-
-    if (this.onAudioOutput) this.onAudioOutput(resampledPcm, TARGET_RATE);
+    this._pushToPacingQueue(resampledPcm, ttsGeneration);
   }
 
   async _synthesizeAndPlay(text, ttsGeneration) {
@@ -485,7 +549,6 @@ class VoicePipeline {
         }
 
         const audioDurationMs = wavDurationMs(audioBuffer);
-        this._setAgentSpeaking(audioDurationMs + 300);
         this._log('info', `Pre-recorded first message duration: ${audioDurationMs}ms`);
 
         const srcRate = audioBuffer.readUInt32LE(24);
@@ -493,9 +556,7 @@ class VoicePipeline {
         const TARGET_RATE = 16000;
         const resampledPcm = resamplePCM(rawPcm, srcRate, TARGET_RATE);
 
-        if (this.onAudioOutput) {
-          this.onAudioOutput(resampledPcm, TARGET_RATE);
-        }
+        this._pushToPacingQueue(resampledPcm, this._ttsGeneration);
       }
     } catch (err) {
       this._log('error', `Error playing pre-recorded first message: ${err.message}`);
@@ -588,6 +649,7 @@ class VoicePipeline {
     this.isConnected = false;
     if (this.speakingTimeout) { clearTimeout(this.speakingTimeout); this.speakingTimeout = null; }
     if (this.transcriptionSilenceTimer) { clearTimeout(this.transcriptionSilenceTimer); this.transcriptionSilenceTimer = null; }
+    this._clearPacingQueue();
     await this.flushPendingInput();
     if (this.sarvamSttStream) {
       this.sarvamSttStream.close();

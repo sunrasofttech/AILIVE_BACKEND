@@ -63,6 +63,7 @@ class VobizSocketHandler {
       // 2. Instantiate generic Voice Pipeline
       const pipeline = new VoicePipeline({
         agent: session.agent,
+        direction: session.direction,
         onAudioOutput: (pcmBuffer, targetRate) => {
           if (ws.readyState === ws.OPEN) {
             const playAudioEvent = JSON.stringify({
