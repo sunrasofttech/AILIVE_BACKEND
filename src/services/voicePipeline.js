@@ -119,6 +119,24 @@ function wavDurationMs(wavBuffer) {
   }
 }
 
+function replaceCustomerVariables(text, customer) {
+  if (!text) return text;
+  const name = customer?.name || 'there';
+  const mobile = customer?.mobile || '';
+  const tags = customer?.tags || '';
+  const notes = customer?.notes || '';
+
+  return text
+    .replace(/\{\{\s*customer_name\s*\}\}/gi, name)
+    .replace(/\{\{\s*customerName\s*\}\}/gi, name)
+    .replace(/\{\{\s*customer_mobile\s*\}\}/gi, mobile)
+    .replace(/\{\{\s*customerMobile\s*\}\}/gi, mobile)
+    .replace(/\{\{\s*customer_tags\s*\}\}/gi, tags)
+    .replace(/\{\{\s*customerTags\s*\}\}/gi, tags)
+    .replace(/\{\{\s*customer_notes\s*\}\}/gi, notes)
+    .replace(/\{\{\s*customerNotes\s*\}\}/gi, notes);
+}
+
 /**
  * VoicePipeline orchestrates STT, LLM streaming, and TTS over WebSockets for custom/customv2.
  */
@@ -152,13 +170,38 @@ class VoicePipeline {
 
     this.isConnected = true;
     this.direction = options.direction || 'outbound';
+    this.customer = options.customer;
+
+    // Determine agent gender from voice
+    let gender = 'neutral';
+    if (this.agent.voice && this.agent.voice.gender) {
+      gender = this.agent.voice.gender;
+    } else {
+      // Fallback prebuilt voice gender detection
+      const voiceIdLower = (this.agent.voice?.voiceId || '').toLowerCase();
+      if (['aoede', 'kore'].includes(voiceIdLower)) {
+        gender = 'female';
+      } else if (['charon', 'fenrir', 'puck'].includes(voiceIdLower)) {
+        gender = 'male';
+      }
+    }
+
+    const genderContext = gender === 'female'
+      ? "You have a FEMALE voice. You should act and speak as a female agent."
+      : gender === 'male'
+      ? "You have a MALE voice. You should act and speak as a male agent."
+      : "You have a gender-neutral voice.";
 
     // Inject call direction context into the system prompt so the LLM is aware
     const directionContext = this.direction === 'inbound'
       ? "This is an INBOUND call. The customer dialed your number to speak with you. (They called you)."
       : "This is an OUTBOUND call. You dialed the customer's phone number to speak with them. (You called them).";
 
-    this.combinedSystemPrompt = `${this.agent.systemPrompt}\n\n[System Call Context: ${directionContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]`;
+    // Resolve customer variables in prompt & greeting
+    const baseSystemPrompt = replaceCustomerVariables(this.agent.systemPrompt, this.customer);
+    this.firstMessage = replaceCustomerVariables(this.agent.firstMessage, this.customer);
+
+    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]`;
 
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
       ? this.agent.aiProvider
@@ -218,7 +261,7 @@ class VoicePipeline {
       }
     }
 
-    this.geminiSession.connect(hasPreRecordedFirstMessage, this.agent.firstMessage);
+    this.geminiSession.connect(hasPreRecordedFirstMessage, this.firstMessage);
 
     if (hasPreRecordedFirstMessage) {
       setImmediate(() => {
@@ -422,7 +465,7 @@ class VoicePipeline {
       hasPreRecordedFirstMessage = fs.existsSync(preRecordedFilePath);
     }
 
-    this.geminiSession.connect(hasPreRecordedFirstMessage, this.agent.firstMessage);
+    this.geminiSession.connect(hasPreRecordedFirstMessage, this.firstMessage);
     if (hasPreRecordedFirstMessage) {
       setImmediate(() => this._playPreRecordedFirstMessage(preRecordedFilePath));
     }
@@ -544,8 +587,8 @@ class VoicePipeline {
       this._log('info', `Playing pre-recorded first message audio from ${filePath}`);
       const audioBuffer = fs.readFileSync(filePath);
       if (audioBuffer.length > 44) {
-        if (this.onAgentTranscription && this.agent.firstMessage) {
-          this.onAgentTranscription(this.agent.firstMessage);
+        if (this.onAgentTranscription && this.firstMessage) {
+          this.onAgentTranscription(this.firstMessage);
         }
 
         const audioDurationMs = wavDurationMs(audioBuffer);
