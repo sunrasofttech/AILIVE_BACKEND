@@ -39,11 +39,21 @@ class VobizController {
 
       const cleanToNum = toNum.startsWith('+') ? toNum.substring(1) : toNum;
       
+      // Generate search variations to support local trunk '0' dialing and country code formats
+      const searchNumbers = [toNum, cleanToNum, `+${cleanToNum}`];
+      if (toNum.startsWith('0')) {
+        const base = toNum.substring(1);
+        searchNumbers.push(base, `+91${base}`, `91${base}`);
+      } else if (cleanToNum.startsWith('91')) {
+        const base = cleanToNum.substring(2);
+        searchNumbers.push(base, `0${base}`);
+      }
+      
       // Look up the registered VobizNumber record
       const vobizNumber = await VobizNumber.findOne({
         where: {
           number: {
-            [Op.in]: [toNum, cleanToNum, `+${cleanToNum}`]
+            [Op.in]: searchNumbers
           },
           status: 'active'
         },
