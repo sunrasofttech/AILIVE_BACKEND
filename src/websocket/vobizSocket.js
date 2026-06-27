@@ -3,23 +3,51 @@ const { CallSession, Agent, Voice, CallLog, Campaign, Customer } = require('../m
 const QueueService = require('../services/queueService');
 const VoicePipeline = require('../services/voicePipeline');
 
-// G.711 mu-law table initialization
-const muLawToPcmTable = new Int16Array(256);
-for (let i = 0; i < 256; i++) {
-  let muLaw = ~i; // bitwise invert
-  let sign = (muLaw & 0x80);
-  let exponent = (muLaw & 0x70) >> 4;
-  let mantissa = (muLaw & 0x0F);
-  let sample = (mantissa << 3) + 33;
-  sample <<= exponent;
-  sample -= 33;
-  muLawToPcmTable[i] = (sign === 0) ? (sample) : (-sample);
+const encodeTable = [
+    0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,
+    4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
+    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7];
+
+const decodeTable = [0,132,396,924,1980,4092,8316,16764];
+const BIAS = 0x84;
+const CLIP = 32635;
+
+function encodeMuLawSample(sample) {
+  let sign = (sample >> 8) & 0x80;
+  if (sign !== 0) sample = -sample;
+  sample = sample + BIAS;
+  if (sample > CLIP) sample = CLIP;
+  let exponent = encodeTable[(sample>>7) & 0xFF];
+  let mantissa = (sample >> (exponent+3)) & 0x0F;
+  return ~(sign | (exponent << 4) | mantissa);
+}
+
+function decodeMuLawSample(muLawSample) {
+  muLawSample = ~muLawSample;
+  let sign = (muLawSample & 0x80);
+  let exponent = (muLawSample >> 4) & 0x07;
+  let mantissa = muLawSample & 0x0F;
+  let sample = decodeTable[exponent] + (mantissa << (exponent+3));
+  return (sign !== 0) ? -sample : sample;
 }
 
 function decodeMuLaw(muLawBuffer) {
   const pcm = Buffer.alloc(muLawBuffer.length * 2);
   for (let i = 0; i < muLawBuffer.length; i++) {
-    pcm.writeInt16LE(muLawToPcmTable[muLawBuffer[i]], i * 2);
+    pcm.writeInt16LE(decodeMuLawSample(muLawBuffer[i]), i * 2);
   }
   return pcm;
 }
@@ -28,22 +56,7 @@ function encodeMuLaw(pcmBuffer) {
   const muLaw = Buffer.alloc(pcmBuffer.length / 2);
   for (let i = 0; i < muLaw.length; i++) {
     const sample = pcmBuffer.readInt16LE(i * 2);
-    let sign = (sample < 0) ? 0x80 : 0x00;
-    let absolute = Math.abs(sample);
-    
-    // clip
-    if (absolute > 32635) absolute = 32635;
-    absolute += 132;
-    
-    let exponent = 7;
-    while ((absolute & 0x4000) === 0 && exponent > 0) {
-      absolute <<= 1;
-      exponent--;
-    }
-    
-    let mantissa = (absolute >> 7) & 0x0F;
-    let mu = ~(sign | (exponent << 4) | mantissa);
-    muLaw[i] = mu;
+    muLaw[i] = encodeMuLawSample(sample);
   }
   return muLaw;
 }
