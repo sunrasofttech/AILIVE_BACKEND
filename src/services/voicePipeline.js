@@ -201,6 +201,15 @@ class VoicePipeline {
     const baseSystemPrompt = replaceCustomerVariables(this.agent.systemPrompt, this.customer);
     this.firstMessage = replaceCustomerVariables(this.agent.firstMessage, this.customer);
 
+    // Natural, human conversational instructions
+    const conversationalGuidelines = `
+[Conversational Guidelines:
+- You must speak in a warm, natural, friendly, and human-like voice.
+- Speak in a lively, helpful, and pleasant tone (not robotic, dry, or formal).
+- Keep responses short, concise, and easy to follow (1-2 sentences maximum per turn) to sound natural over phone calls.
+- Never output markdown lists, bullet points, asterisks, brackets, or code-like structures. Speak in plain conversational sentences.
+- Match the customer's language (English, Hindi, etc.) naturally and dynamically.]`;
+
     // Pre-configure customer info if available
     let customerInfoContext = '';
     if (this.customer) {
@@ -211,7 +220,7 @@ class VoicePipeline {
 - Notes: ${this.customer.notes || 'None'}]`;
     }
 
-    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]${customerInfoContext}`;
+    this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]${conversationalGuidelines}${customerInfoContext}`;
 
     this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
       ? this.agent.aiProvider
@@ -497,8 +506,8 @@ class VoicePipeline {
     this.audioOutBuffer = Buffer.concat([this.audioOutBuffer, pcmBuffer]);
 
     if (!this.audioInterval) {
-      const CHUNK_SIZE = 640; // 20ms of 16kHz 16-bit mono PCM (16000 * 2 * 0.02)
-      const INTERVAL_MS = 20;
+      const CHUNK_SIZE = 2560; // 80ms of 16kHz 16-bit mono PCM (16000 * 2 * 0.08)
+      const INTERVAL_MS = 80;
 
       this.audioInterval = setInterval(() => {
         if (!this.isConnected) {
