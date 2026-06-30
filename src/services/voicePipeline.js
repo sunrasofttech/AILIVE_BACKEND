@@ -1,6 +1,7 @@
 const { GeminiLiveSession } = require('./geminiLiveService');
 const { GeminiMultimodalLiveSession } = require('./geminiMultimodalLiveService');
 const { SarvamLiveSession } = require('./sarvamLiveService');
+const ElevenLabsLiveSession = require('./elevenlabsLiveService');
 const { SarvamSTTStream, SarvamTTSStream, SARVAM_LOCALE_MAP } = require('./sarvamSocketService');
 const defaults = require('../config/defaults');
 const fs = require('fs');
@@ -242,14 +243,43 @@ Examples of when to end: "thank you bye", "that's all", "call cut karo", "baad m
 
     this.combinedSystemPrompt = `${baseSystemPrompt}\n\n[System Call Context: ${directionContext} ${genderContext} Maintain this awareness throughout the conversation and speak/respond accordingly.]${conversationalGuidelines}${endCallInstruction}${customerInfoContext}`;
 
-    this.activeProvider = ['geminilive', 'custom', 'customv2'].includes(this.agent.aiProvider)
+    this.activeProvider = ['geminilive', 'custom', 'customv2', 'elevenlabs'].includes(this.agent.aiProvider)
       ? this.agent.aiProvider
       : 'custom';
     this._isSwitchingProvider = false;
 
     this._log('info', `Initializing VoicePipeline with AI Provider: ${this.agent.aiProvider}`);
 
-    if (this.activeProvider === 'geminilive') {
+    if (this.activeProvider === 'elevenlabs') {
+      this.geminiSession = new ElevenLabsLiveSession({
+        systemPrompt: this.combinedSystemPrompt,
+        agentId: this.agent.voice?.voiceId,
+        firstMessage: this.firstMessage,
+        onAudioOutput: (pcmBuffer, sampleRate) => {
+          const resampledPcm = resamplePCM(pcmBuffer, sampleRate, 16000);
+          const rawDurationMs = Math.round((resampledPcm.length / 32000) * 1000);
+          this._setAgentSpeaking(rawDurationMs + 300);
+          if (this.onAudioOutput) this.onAudioOutput(resampledPcm, 16000);
+        },
+        onTranscription: (text, role) => {
+          if (role === 'agent' && this.onAgentTranscription) {
+            this.onAgentTranscription(text);
+          } else if (role === 'user' && this.onCustomerTranscription) {
+            this.onCustomerTranscription(text);
+          }
+        },
+        onInterrupted: () => {
+          this._cancelAgentSpeech();
+        },
+        onError: (err) => {
+          this._log('error', `ElevenLabs Live connection error: ${err.message}`);
+          if (this.onError) this.onError(err);
+        },
+        onClose: () => {
+          this._log('info', 'ElevenLabs Live session closed');
+        },
+      });
+    } else if (this.activeProvider === 'geminilive') {
       this.geminiSession = new GeminiMultimodalLiveSession({
         systemPrompt: this.combinedSystemPrompt,
         voiceName: this.agent.voice?.voiceId || 'Puck',
@@ -293,7 +323,7 @@ Examples of when to end: "thank you bye", "that's all", "call cut karo", "baad m
     let hasPreRecordedFirstMessage = false;
     let preRecordedFilePath = null;
 
-    if (this.activeProvider !== 'geminilive' && this.agent.firstMessageAudioPath) {
+    if (this.activeProvider !== 'geminilive' && this.activeProvider !== 'elevenlabs' && this.agent.firstMessageAudioPath) {
       preRecordedFilePath = path.resolve(process.cwd(), this.agent.firstMessageAudioPath);
       if (fs.existsSync(preRecordedFilePath)) {
         hasPreRecordedFirstMessage = true;
@@ -868,7 +898,14 @@ Examples of when to end: "thank you bye", "that's all", "call cut karo", "baad m
   async handleAudioInput(pcmBuffer) {
     if (!this.isConnected) return;
 
-    if (this.activeProvider === 'geminilive') {
+    if (this.activeProvider === 'elevenlabs') {
+      if (!this.agent.allowInterruption && this.isAgentSpeaking) {
+        return;
+      }
+      if (this.geminiSession && typeof this.geminiSession.sendAudioChunk === 'function') {
+        this.geminiSession.sendAudioChunk(pcmBuffer);
+      }
+    } else if (this.activeProvider === 'geminilive') {
       if (!this.agent.allowInterruption && this.isAgentSpeaking) {
         return;
       }

@@ -173,8 +173,11 @@ class GeminiMultimodalLiveSession extends EventEmitter {
           console.log('[Gemini Multimodal Live] Model was interrupted.');
           if (this.onInterrupted) this.onInterrupted();
         }
+      } else if (parsed.sessionResumptionUpdate) {
+        this.sessionResumptionHandle = parsed.sessionResumptionUpdate.newHandle;
+        console.log(`[Gemini Multimodal Live] Session resumption handle updated: ${this.sessionResumptionHandle}`);
       } else if (!parsed.setupComplete) {
-         // If it's not serverContent and not setupComplete, log it!
+         // If it's not serverContent, setupComplete, or sessionResumptionUpdate, log it!
          console.log('[Gemini Multimodal Live] Received unknown/error message:', JSON.stringify(parsed));
       }
     } catch (err) {
