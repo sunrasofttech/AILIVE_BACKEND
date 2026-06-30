@@ -837,9 +837,14 @@ Examples of when to end: "thank you bye", "that's all", "call cut karo", "baad m
     }
 
     if (this.isAgentSpeaking) {
-      this.pendingUserTranscripts.push(finalTranscript);
-      this._log('info', `[Interruption queued] Customer spoke while agent speaking; will process after agent finishes: "${finalTranscript}"`);
-      return false;
+      if (this.agent.allowInterruption !== false) {
+        this._log('info', `[Interruption] Customer interrupted agent. Cancelling agent speech and sending new turn.`);
+        this._cancelAgentSpeech();
+      } else {
+        this.pendingUserTranscripts.push(finalTranscript);
+        this._log('info', `[Interruption queued] Customer spoke while agent speaking; will process after agent finishes: "${finalTranscript}"`);
+        return false;
+      }
     }
 
     // Final customer transcript processed — reset inactivity monitor
