@@ -95,6 +95,7 @@ class VobizController {
         vobizNumberId: vobizNumber.id,
         customerId: customer.id,
         wsSessionToken: wsToken,
+        vobizCallUuid: req.body.CallUUID || req.query.CallUUID || req.body.call_uuid || req.query.call_uuid || null,
         status: 'initiated',
         direction: 'inbound',
       });
