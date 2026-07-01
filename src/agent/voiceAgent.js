@@ -167,9 +167,14 @@ const voiceAgent = defineAgent({
         const startTime = dbSession?.startTime || new Date();
         const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
 
-        const chatMessages = session.chatCtx.messages;
+        const chatMessages = session.chatCtx.items.filter(item => item.type === 'message');
         const formattedTranscript = chatMessages
-          .map(msg => `${msg.role === 'assistant' ? 'Agent' : 'Customer'}: ${msg.content}`)
+          .map(msg => {
+            const roleName = msg.role === 'assistant' ? 'Agent' : 'Customer';
+            const text = msg.textContent || '';
+            return `${roleName}: ${text}`;
+          })
+          .filter(line => line.trim().length > 0)
           .join('\n');
 
         console.log(`[LiveKit Agent] Compiled transcript:\n${formattedTranscript}`);
