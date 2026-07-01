@@ -1,0 +1,9 @@
+{
+  "name": "Route to room",
+  "trunk_ids": [],
+  "rule": {
+    "dispatchRuleIndividual": {
+      "roomPrefix": "sip_call_"
+    }
+  }
+}
