@@ -8,12 +8,13 @@ const { SarvamSTT, SarvamTTS } = require('../services/livekitSarvamPlugin');
 
 const voiceAgent = defineAgent({
   entry: async (ctx) => {
+    console.log('[LiveKit Agent] Connecting to the room...');
+    await ctx.connect();
+
     // Wait for the caller to join the room
     console.log('[LiveKit Agent] Waiting for participant to connect...');
     const participant = await ctx.waitForParticipant();
     console.log(`[LiveKit Agent] Participant connected: ${participant.identity}`);
-
-    await ctx.connect();
 
     // Default configuration fallback
     let systemPrompt = "You are a helpful, natural, friendly voice assistant. Keep responses short and conversational.";
