@@ -103,9 +103,48 @@ class VobizController {
       await CallLog.create({
         callSessionId: session.id,
         logLevel: 'info',
-        message: `Inbound call from ${fromNum} to ${toNum} answered and routed to Agent: ${vobizNumber.agent.name}`,
+        message: `Inbound call from ${fromNum} to ${toNum} answered. aiProvider: ${vobizNumber.agent.aiProvider}`,
       });
 
+      // Route dynamically based on Agent AI Provider configuration
+      if (vobizNumber.agent.aiProvider === 'elevenlabs') {
+        const isIndia = fromNum.includes('91') || toNum.includes('91');
+        const sipEndpoint = isIndia 
+          ? 'sip.rtc.in.residency.elevenlabs.io:5060;transport=tcp' 
+          : 'sip.rtc.elevenlabs.io:5060;transport=tcp';
+
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial>
+        <Sip>sip:${sipEndpoint}</Sip>
+    </Dial>
+</Response>`;
+        res.set('Content-Type', 'text/xml');
+        return res.send(xml);
+      }
+
+      if (vobizNumber.agent.aiProvider === 'custom' || vobizNumber.agent.aiProvider === 'customv2') {
+        // Route to local/self-hosted LiveKit Server SIP Trunk
+        // Using session.id as user part so the room name resolves to `sip_call_${session.id}`
+        const sipEndpoint = `sip:${session.id}@${defaults.livekit.sipHost}`;
+        
+        await CallLog.create({
+          callSessionId: session.id,
+          logLevel: 'info',
+          message: `Routing inbound call to LiveKit SIP trunk: ${sipEndpoint}`,
+        });
+
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial>
+        <Sip>${sipEndpoint}</Sip>
+    </Dial>
+</Response>`;
+        res.set('Content-Type', 'text/xml');
+        return res.send(xml);
+      }
+
+      // Default fallback: Custom WebSocket server stream
       const streamUrl = `wss://${defaults.ws.host}/ws/vobiz?token=${wsToken}`;
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>

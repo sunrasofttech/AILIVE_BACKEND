@@ -156,5 +156,8 @@ module.exports = {
     get apiSecret() {
       return process.env.LIVEKIT_API_SECRET || 'secret';
     },
+    get sipHost() {
+      return process.env.LIVEKIT_SIP_HOST || '127.0.0.1:5060';
+    },
   },
 };
