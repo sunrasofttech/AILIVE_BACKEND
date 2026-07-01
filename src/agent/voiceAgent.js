@@ -73,6 +73,12 @@ const voiceAgent = defineAgent({
       // Handle wsSessionToken match (for dynamically mapped rooms)
       searchConditions.push({ wsSessionToken: roomName });
 
+      // Handle vobizCallUuid match from SIP trunk attributes
+      const sipCallId = attributes['sip.callID'] || attributes['sip.callid'] || '';
+      if (sipCallId) {
+        searchConditions.push({ vobizCallUuid: sipCallId });
+      }
+
       dbSession = await CallSession.findOne({
         where: {
           [Op.or]: searchConditions
