@@ -1,9 +1,11 @@
 {
-  "name": "Route to room",
-  "trunk_ids": [],
-  "rule": {
-    "dispatchRuleIndividual": {
-      "roomPrefix": "sip_call_"
+  "dispatchRule": {
+    "name": "Route to room",
+    "trunkIds": [],
+    "rule": {
+      "dispatchRuleIndividual": {
+        "roomPrefix": "sip_call_"
+      }
     }
   }
 }
