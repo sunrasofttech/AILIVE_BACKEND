@@ -2,6 +2,7 @@ const { defineAgent, voice } = require('@livekit/agents');
 const openai = require('@livekit/agents-plugin-openai');
 const defaults = require('../config/defaults');
 const { VobizNumber, Agent: DBAgent, Voice, CallSession } = require('../models');
+const { Op } = require('sequelize');
 const QueueService = require('../services/queueService');
 const { SarvamSTT, SarvamTTS } = require('../services/livekitSarvamPlugin');
 
@@ -62,19 +63,32 @@ const voiceAgent = defineAgent({
       callSessionId = roomName.substring('call_'.length);
     }
 
-    if (callSessionId) {
-      try {
-        dbSession = await CallSession.findByPk(callSessionId);
-        if (dbSession) {
-          console.log(`[LiveKit Agent] Linked to pre-created session: ${dbSession.id}`);
-          // Mark call as connected in the DB
-          dbSession.status = 'connected';
-          dbSession.startTime = new Date();
-          await dbSession.save();
-        }
-      } catch (err) {
-        console.error('[LiveKit Agent] CallSession database lookup failed:', err.message);
+    try {
+      const searchConditions = [];
+      if (callSessionId) {
+        // Handle UUID primary key match
+        searchConditions.push({ id: callSessionId });
       }
+      // Handle wsSessionToken match (for dynamically mapped rooms)
+      searchConditions.push({ wsSessionToken: roomName });
+
+      dbSession = await CallSession.findOne({
+        where: {
+          [Op.or]: searchConditions
+        }
+      });
+
+      if (dbSession) {
+        console.log(`[LiveKit Agent] Linked to call session: ${dbSession.id}`);
+        // Mark call as connected in the DB
+        dbSession.status = 'connected';
+        dbSession.startTime = new Date();
+        await dbSession.save();
+      } else {
+        console.warn(`[LiveKit Agent] No session found matching ID "${callSessionId}" or Token "${roomName}"`);
+      }
+    } catch (err) {
+      console.error('[LiveKit Agent] CallSession database lookup failed:', err.message);
     }
 
     // Configure STT Sarvam
