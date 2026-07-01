@@ -13,6 +13,11 @@ class VobizController {
    */
   async answerCallWebhook(req, res, next) {
     try {
+      console.log('[VoBiz Webhook] Incoming call webhook request:', {
+        method: req.method,
+        query: req.query,
+        body: req.body
+      });
       const { token } = req.query;
 
       // Outbound call flow: token already generated and passed as query parameter
