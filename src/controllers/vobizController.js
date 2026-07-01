@@ -72,9 +72,17 @@ class VobizController {
     <Speak voice="WOMAN" language="en-US">This number is not configured to receive calls at this time.</Speak>
     <Hangup/>
 </Response>`;
+        console.log('[VoBiz Webhook] Returning No-Agent XML:', xml);
         res.set('Content-Type', 'text/xml');
         return res.send(xml);
       }
+
+      console.log(`[VoBiz Webhook] Resolved VobizNumber matching "${toNum}":`, {
+        vobizNumberId: vobizNumber.id,
+        agentId: vobizNumber.agentId,
+        agentName: vobizNumber.agent.name,
+        aiProvider: vobizNumber.agent.aiProvider
+      });
 
       // Find or register customer record for caller
       let customer = await Customer.findOne({
@@ -124,6 +132,7 @@ class VobizController {
         <User>sip:${sipEndpoint}</User>
     </Dial>
 </Response>`;
+        console.log('[VoBiz Webhook] Returning ElevenLabs XML:', xml);
         res.set('Content-Type', 'text/xml');
         return res.send(xml);
       }
@@ -145,6 +154,7 @@ class VobizController {
         <User>${sipEndpoint}</User>
     </Dial>
 </Response>`;
+        console.log('[VoBiz Webhook] Returning LiveKit XML:', xml);
         res.set('Content-Type', 'text/xml');
         return res.send(xml);
       }
