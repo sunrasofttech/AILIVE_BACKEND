@@ -144,4 +144,17 @@ module.exports = {
       return process.env.SMTP_FROM || 'noreply@ailive.com';
     },
   },
+
+  // LiveKit Configuration
+  livekit: {
+    get url() {
+      return process.env.LIVEKIT_URL || 'ws://localhost:7880';
+    },
+    get apiKey() {
+      return process.env.LIVEKIT_API_KEY || 'devkey';
+    },
+    get apiSecret() {
+      return process.env.LIVEKIT_API_SECRET || 'secret';
+    },
+  },
 };

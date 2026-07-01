@@ -1,0 +1,180 @@
+const { WebhookReceiver } = require('livekit-server-sdk');
+const defaults = require('../config/defaults');
+const { CallSession, CallLog, VobizNumber, Customer, Agent } = require('../models');
+const { Op } = require('sequelize');
+
+// Initialize WebhookReceiver
+let receiver;
+try {
+  if (defaults.livekit.apiKey && defaults.livekit.apiSecret) {
+    receiver = new WebhookReceiver(defaults.livekit.apiKey, defaults.livekit.apiSecret);
+  }
+} catch (e) {
+  console.warn('[LiveKit Webhook] Failed to initialize WebhookReceiver. API Key/Secret might be missing:', e.message);
+}
+
+class LivekitController {
+  async handleWebhook(req, res, next) {
+    try {
+      const authHeader = req.get('Authorization');
+      if (!authHeader) {
+        return res.status(401).json({ success: false, message: 'Missing Authorization header' });
+      }
+
+      // Check if body is raw buffer (e.g. from express.raw)
+      const bodyStr = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : JSON.stringify(req.body);
+
+      let event;
+      if (receiver) {
+        try {
+          event = receiver.receive(bodyStr, authHeader);
+        } catch (verifyErr) {
+          console.error('[LiveKit Webhook] Signature verification failed:', verifyErr.message);
+          return res.status(401).json({ success: false, message: 'Invalid webhook signature' });
+        }
+      } else {
+        // Fallback/bypass if receiver is not configured (e.g. for development)
+        console.warn('[LiveKit Webhook] Bypassing signature verification (LiveKit credentials missing)');
+        try {
+          event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        } catch (parseErr) {
+          // If it's a buffer, parse string
+          event = JSON.parse(bodyStr);
+        }
+      }
+
+      console.log(`[LiveKit Webhook] Event: ${event.event}, Room: ${event.room?.name}`);
+
+      const roomName = event.room?.name || '';
+      const eventName = event.event;
+
+      // Extract callSessionId if it's named 'sip_call_UUID' or 'call_UUID'
+      let callSessionId = null;
+      if (roomName.startsWith('sip_call_')) {
+        callSessionId = roomName.substring('sip_call_'.length);
+      } else if (roomName.startsWith('call_')) {
+        callSessionId = roomName.substring('call_'.length);
+      }
+
+      // 1. Process Event Room Started
+      if (eventName === 'room_started') {
+        if (callSessionId) {
+          const session = await CallSession.findByPk(callSessionId);
+          if (session) {
+            session.status = 'connected';
+            await session.save();
+
+            await CallLog.create({
+              callSessionId: session.id,
+              logLevel: 'info',
+              message: `LiveKit Room started: ${roomName}. Call status set to connected.`,
+            });
+          }
+        }
+      }
+
+      // 2. Process Event Participant Joined (especially for Inbound SIP routing mapping)
+      if (eventName === 'participant_joined') {
+        const participant = event.participant;
+        const attributes = participant?.attributes || {};
+        
+        // If it's a SIP caller, create CallSession dynamically if not already created
+        const isSip = participant?.identity?.startsWith('sip:') || attributes['sip.phoneNumber'];
+        
+        if (isSip) {
+          const fromNum = attributes['sip.phoneNumber'] || participant.identity.replace('sip:', '');
+          const toNum = attributes['sip.trunkPhoneNumber'] || '';
+
+          console.log(`[LiveKit Webhook] SIP Caller Joined: From ${fromNum} to ${toNum}`);
+
+          // If session doesn't exist yet, we create it dynamically for inbound routing
+          let session;
+          if (callSessionId) {
+            session = await CallSession.findByPk(callSessionId);
+          }
+
+          if (!session) {
+            // Find VobizNumber to get the agent
+            const cleanToNum = toNum.startsWith('+') ? toNum.substring(1) : toNum;
+            const searchNumbers = [toNum, cleanToNum, `+${cleanToNum}`];
+
+            const vobizNumber = await VobizNumber.findOne({
+              where: {
+                number: { [Op.in]: searchNumbers },
+                status: 'active',
+              },
+              include: [{ model: Agent, as: 'agent' }],
+            });
+
+            if (vobizNumber) {
+              // Find or create customer
+              let customer = await Customer.findOne({
+                where: { userId: vobizNumber.userId, mobile: fromNum },
+              });
+
+              if (!customer) {
+                customer = await Customer.create({
+                  userId: vobizNumber.userId,
+                  mobile: fromNum,
+                  name: 'Inbound SIP Caller',
+                });
+              }
+
+              // Create dynamic inbound CallSession
+              session = await CallSession.create({
+                userId: vobizNumber.userId,
+                agentId: vobizNumber.agentId,
+                vobizNumberId: vobizNumber.id,
+                customerId: customer.id,
+                wsSessionToken: roomName,
+                vobizCallUuid: attributes['sip.callID'] || null,
+                status: 'connected',
+                direction: 'inbound',
+              });
+
+              await CallLog.create({
+                callSessionId: session.id,
+                logLevel: 'info',
+                message: `Inbound SIP call mapped. Room: ${roomName}. Routed to Agent: ${vobizNumber.agent?.name}`,
+              });
+            } else {
+              console.warn(`[LiveKit Webhook] No active agent configured for dialed number: ${toNum}`);
+            }
+          } else {
+            // Update session status to connected and save CallUUID
+            session.status = 'connected';
+            if (attributes['sip.callID']) {
+              session.vobizCallUuid = attributes['sip.callID'];
+            }
+            await session.save();
+          }
+        }
+      }
+
+      // 3. Process Event Room Finished
+      if (eventName === 'room_finished') {
+        if (callSessionId) {
+          const session = await CallSession.findByPk(callSessionId);
+          if (session) {
+            session.status = 'completed';
+            session.endTime = new Date();
+            await session.save();
+
+            await CallLog.create({
+              callSessionId: session.id,
+              logLevel: 'info',
+              message: `LiveKit Room finished: ${roomName}. Call status set to completed.`,
+            });
+          }
+        }
+      }
+
+      return res.status(200).json({ success: true, message: 'Event handled successfully' });
+    } catch (err) {
+      console.error('[LiveKit Webhook Error]:', err);
+      next(err);
+    }
+  }
+}
+
+module.exports = new LivekitController();
