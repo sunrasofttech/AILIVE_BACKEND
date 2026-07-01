@@ -139,8 +139,9 @@ class VobizController {
 
       if (vobizNumber.agent.aiProvider === 'custom' || vobizNumber.agent.aiProvider === 'customv2') {
         // Route to local/self-hosted LiveKit Server SIP Trunk
-        // Using session.id as user part so the room name resolves to `sip_call_${session.id}`
-        const sipEndpoint = `sip:${session.id}@${defaults.livekit.sipHost};transport=tcp`;
+        // Using numeric dialed number as user part to satisfy VoBiz/Plivo carrier validation rules
+        const cleanSipUser = toNum.replace(/\D/g, '') || '100';
+        const sipEndpoint = `sip:${cleanSipUser}@${defaults.livekit.sipHost};transport=tcp`;
         
         await CallLog.create({
           callSessionId: session.id,
