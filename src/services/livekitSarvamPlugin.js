@@ -1,4 +1,4 @@
-const { stt, SpeechStream, tts, SynthesizeStream, ChunkedStream } = require('@livekit/agents');
+const { stt, tts } = require('@livekit/agents');
 const { AudioFrame } = require('@livekit/rtc-node');
 const { WebSocket } = require('ws');
 const defaults = require('../config/defaults');
@@ -17,7 +17,7 @@ const SARVAM_LOCALE_MAP = {
   'od': 'od-IN',
 };
 
-class SarvamSpeechStream extends SpeechStream {
+class SarvamSpeechStream extends stt.SpeechStream {
   constructor(sttInstance, options) {
     super(sttInstance, 16000, options?.connOptions);
     this.sttInstance = sttInstance;
@@ -84,7 +84,7 @@ class SarvamSpeechStream extends SpeechStream {
     // Pump frames from input queue to Sarvam WSS
     try {
       for await (const chunk of this.input) {
-        if (chunk === SpeechStream.FLUSH_SENTINEL) {
+        if (chunk === stt.SpeechStream.FLUSH_SENTINEL) {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'flush' }));
           }
@@ -150,7 +150,7 @@ class SarvamSTT extends stt.STT {
   }
 }
 
-class SarvamSynthesizeStream extends SynthesizeStream {
+class SarvamSynthesizeStream extends tts.SynthesizeStream {
   constructor(ttsInstance, options) {
     super(ttsInstance, options?.connOptions);
     this.ttsInstance = ttsInstance;
@@ -219,7 +219,7 @@ class SarvamSynthesizeStream extends SynthesizeStream {
     // Pump input text to Sarvam WSS
     try {
       for await (const text of this.input) {
-        if (text === SynthesizeStream.FLUSH_SENTINEL) {
+        if (text === tts.SynthesizeStream.FLUSH_SENTINEL) {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'flush' }));
           }
@@ -243,7 +243,7 @@ class SarvamSynthesizeStream extends SynthesizeStream {
   }
 }
 
-class SarvamChunkedStream extends ChunkedStream {
+class SarvamChunkedStream extends tts.ChunkedStream {
   constructor(text, ttsInstance, options) {
     super(text, ttsInstance, options?.connOptions, options?.abortSignal);
     this.ttsInstance = ttsInstance;
