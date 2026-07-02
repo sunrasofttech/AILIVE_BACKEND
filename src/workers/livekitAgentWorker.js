@@ -13,9 +13,11 @@ function startLivekitWorker() {
 
   console.log(`Starting LiveKit Agent Worker pointing to LiveKit server: ${process.env.LIVEKIT_URL}`);
 
-  // Default to 'start' option if no CLI args are passed
+  // Default to 'dev' option if no CLI args are passed.
+  // 'start' (production mode) hardcodes port 8081 which conflicts with PM2.
+  // 'dev' mode picks a random open port for the health-check server.
   if (process.argv.length <= 2) {
-    process.argv.push('start');
+    process.argv.push('dev');
   }
 
   const opts = new ServerOptions({
