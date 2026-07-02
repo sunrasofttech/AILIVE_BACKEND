@@ -247,6 +247,13 @@ class LivekitController {
       if (livekitUrl.startsWith('http://')) livekitUrl = livekitUrl.replace('http://', 'ws://');
       if (livekitUrl.startsWith('https://')) livekitUrl = livekitUrl.replace('https://', 'wss://');
 
+      // If the backend is using localhost/127.0.0.1, it works for server-to-server, 
+      // but web browsers need the public hostname to connect from the outside.
+      if (livekitUrl.includes('127.0.0.1') || livekitUrl.includes('localhost')) {
+        const hostname = req.hostname; // e.g., api.callkardo.com
+        livekitUrl = livekitUrl.replace('127.0.0.1', hostname).replace('localhost', hostname);
+      }
+
       res.json({
         success: true,
         token: token,
