@@ -11,28 +11,26 @@ function startLivekitWorker() {
   process.env.LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || defaults.livekit.apiKey;
   process.env.LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || defaults.livekit.apiSecret;
 
-  console.log(`Starting LiveKit Agent Worker pointing to LiveKit server: ${process.env.LIVEKIT_URL}`);
+  console.log(`[AgentWorker] Starting LiveKit Agent Worker → ${process.env.LIVEKIT_URL}`);
 
-  // Default to 'dev' option if no CLI args are passed.
-  // 'start' (production mode) hardcodes port 8081 which conflicts with PM2.
-  // 'dev' mode picks a random open port for the health-check server.
-  if (process.argv.length <= 2) {
+  // The CLI parser reads from process.argv.
+  // When forked by server.js, 'dev' is passed as an argument.
+  // Ensure 'dev' is in argv so it uses a random port (avoids EADDRINUSE on 8081).
+  const hasMode = process.argv.some(a => a === 'dev' || a === 'start');
+  if (!hasMode) {
     process.argv.push('dev');
   }
 
   const opts = new ServerOptions({
     agent: voiceAgentPath,
-    initializeProcessTimeout: 60000, // 60 seconds (Node.js SDK uses milliseconds, not seconds!)
-    port: 0, // Pick a random open port for the health check server to avoid EADDRINUSE
+    initializeProcessTimeout: 120000, // 120 seconds for slow 1-vCPU servers
+    port: 0, // Random open port for the health-check server
+    numIdleProcesses: 1, // Pre-warm 1 process so it's ready instantly for room dispatch
   });
 
   cli.runApp(opts);
 }
 
-if (require.main === module) {
-  startLivekitWorker();
-}
+// Always start when this file is loaded (both `require.main === module` AND when forked)
+startLivekitWorker();
 
-module.exports = {
-  startLivekitWorker,
-};
