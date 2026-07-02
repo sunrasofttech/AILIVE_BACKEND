@@ -25,6 +25,19 @@ const swaggerSpec = require('./utils/swagger');
 const path = require('path');
 
 const app = express();
+const { createProxyMiddleware } = require('http-proxy-middleware');
+
+// Proxy LiveKit WebRTC and API routes to the internal LiveKit Server
+const liveKitProxy = createProxyMiddleware({
+  target: 'http://127.0.0.1:7880',
+  ws: true, // proxy websockets
+  changeOrigin: true,
+  logLevel: 'debug',
+});
+
+app.use('/rtc', liveKitProxy);
+app.use('/twirp', liveKitProxy);
+
 
 // View Engine Setup for Web Tester
 app.set('views', path.join(__dirname, 'views'));
