@@ -196,15 +196,29 @@ class LivekitController {
       const roomName = `web_call_${agentId}_${Date.now()}`;
       const participantName = `web_tester_${Date.now()}`;
 
+      // Find or create a Web Tester Customer for this user
+      const [customer] = await Customer.findOrCreate({
+        where: { userId: agent.userId, mobile: 'Web Tester' },
+        defaults: { name: 'Web Tester' },
+      });
+
+      // Find or create a dummy VobizNumber for Web Tests
+      const [vobizNumber] = await VobizNumber.findOrCreate({
+        where: { userId: agent.userId, number: 'Web-Test-Number' },
+        defaults: { agentId: agent.id },
+      });
+
       // Create a CallSession in the DB so the Agent Worker knows how to route it
       // The worker looks for sessions where `wsSessionToken` matches the roomName
       const callSession = await CallSession.create({
+        userId: agent.userId,
         agentId: agent.id,
+        customerId: customer.id,
+        vobizNumberId: vobizNumber.id,
         direction: 'inbound', // Treating web tests as inbound calls
         status: 'initiated',
         startTime: new Date(),
         wsSessionToken: roomName,
-        customerPhoneNumber: 'Web Tester',
       });
 
       console.log(`[WebTester] Created CallSession ${callSession.id} for Agent ${agent.id}. Room: ${roomName}`);
