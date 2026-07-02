@@ -226,6 +226,16 @@ class LivekitController {
 
       console.log(`[WebTester] Created CallSession ${callSession.id} for Agent ${agent.id}. Room: ${roomName}`);
 
+      // Explicitly dispatch the LiveKit agent to this room to ensure it joins
+      const { AgentDispatchClient } = require('livekit-server-sdk');
+      try {
+        const agentDispatch = new AgentDispatchClient(defaults.livekit.url, defaults.livekit.apiKey, defaults.livekit.apiSecret);
+        await agentDispatch.createDispatch(roomName, '');
+        console.log(`[WebTester] Explicitly dispatched agent to room ${roomName}`);
+      } catch (dispatchErr) {
+        console.warn(`[WebTester] Agent dispatch failed (it may auto-join):`, dispatchErr.message);
+      }
+
       // Generate LiveKit Access Token
       if (!defaults.livekit.apiKey || !defaults.livekit.apiSecret) {
         throw new Error('LiveKit API Key or Secret is missing in server configuration');
