@@ -3,6 +3,9 @@ const LivekitController = require('../controllers/livekitController');
 
 const router = express.Router();
 
+// Get LiveKit WebRTC Access Token for browser clients
+router.get('/web-token', LivekitController.getWebToken);
+
 // LiveKit calls this webhook with raw request signature validation
 router.post('/webhook', express.raw({ type: () => true }), LivekitController.handleWebhook);
 

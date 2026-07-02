@@ -1,4 +1,4 @@
-const { WebhookReceiver } = require('livekit-server-sdk');
+const { WebhookReceiver, AccessToken } = require('livekit-server-sdk');
 const defaults = require('../config/defaults');
 const { CallSession, CallLog, VobizNumber, Customer, Agent } = require('../models');
 const { Op } = require('sequelize');
@@ -169,10 +169,80 @@ class LivekitController {
         }
       }
 
-      return res.status(200).json({ success: true, message: 'Event handled successfully' });
+      // 4. Default: Handle everything else (track published, etc)
+      res.status(200).send('OK');
     } catch (err) {
-      console.error('[LiveKit Webhook Error]:', err);
-      next(err);
+      console.error('[LiveKit Webhook] Error processing webhook:', err);
+      res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+  }
+
+  // Generate WebRTC token for browser clients
+  async getWebToken(req, res) {
+    try {
+      const { agentId } = req.query;
+      
+      if (!agentId) {
+        return res.status(400).json({ success: false, message: 'agentId is required' });
+      }
+
+      // Validate Agent
+      const agent = await Agent.findByPk(agentId);
+      if (!agent) {
+        return res.status(404).json({ success: false, message: 'Agent not found' });
+      }
+
+      // Generate unique room name and participant ID for the web tester
+      const roomName = `web_call_${agentId}_${Date.now()}`;
+      const participantName = `web_tester_${Date.now()}`;
+
+      // Create a CallSession in the DB so the Agent Worker knows how to route it
+      // The worker looks for sessions where `wsSessionToken` matches the roomName
+      const callSession = await CallSession.create({
+        agentId: agent.id,
+        direction: 'inbound', // Treating web tests as inbound calls
+        status: 'initiated',
+        startTime: new Date(),
+        wsSessionToken: roomName,
+        customerPhoneNumber: 'Web Tester',
+      });
+
+      console.log(`[WebTester] Created CallSession ${callSession.id} for Agent ${agent.id}. Room: ${roomName}`);
+
+      // Generate LiveKit Access Token
+      if (!defaults.livekit.apiKey || !defaults.livekit.apiSecret) {
+        throw new Error('LiveKit API Key or Secret is missing in server configuration');
+      }
+
+      const at = new AccessToken(defaults.livekit.apiKey, defaults.livekit.apiSecret, {
+        identity: participantName,
+        name: 'Web Tester',
+      });
+      
+      at.addGrant({
+        roomJoin: true,
+        room: roomName,
+        canPublish: true,
+        canSubscribe: true,
+      });
+
+      const token = await at.toJwt();
+
+      // Determine correct WS URL from HTTP URL (e.g. https://domain.com -> wss://domain.com)
+      let livekitUrl = defaults.livekit.url;
+      if (livekitUrl.startsWith('http://')) livekitUrl = livekitUrl.replace('http://', 'ws://');
+      if (livekitUrl.startsWith('https://')) livekitUrl = livekitUrl.replace('https://', 'wss://');
+
+      res.json({
+        success: true,
+        token: token,
+        roomName: roomName,
+        livekitUrl: livekitUrl,
+      });
+
+    } catch (err) {
+      console.error('[LiveKit Token] Error generating web token:', err);
+      res.status(500).json({ success: false, message: 'Error generating token: ' + err.message });
     }
   }
 }
